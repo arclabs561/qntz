@@ -1,0 +1,24 @@
+[package]
+name = "qntz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Arc <attobop@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "Vector quantization primitives (RaBitQ, ternary, bit packing) for ANN systems."
+repository = "https://github.com/arclabs561/qntz"
+homepage = "https://github.com/arclabs561/qntz"
+documentation = "https://docs.rs/qntz"
+keywords = ["quantization", "vector-search", "ann", "pq", "compression"]
+categories = ["algorithms", "science"]
+
+[dependencies]
+thiserror = "2.0"
+
+[features]
+default = []
+rabitq = []
+ternary = []
+
+[dev-dependencies]
+proptest = "1.9"
