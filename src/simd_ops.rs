@@ -8,7 +8,7 @@
 pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
     let full_bytes = codes.len() / 8;
 
-    for byte_idx in 0..full_bytes {
+    for (byte_idx, packed_byte) in packed.iter_mut().enumerate().take(full_bytes) {
         let base = byte_idx * 8;
         let mut byte = 0u8;
 
@@ -37,7 +37,7 @@ pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
             byte |= 1 << 7;
         }
 
-        packed[byte_idx] = byte;
+        *packed_byte = byte;
     }
 
     let remaining = codes.len() % 8;
@@ -57,8 +57,7 @@ pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
 pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) {
     let full_bytes = dim / 8;
 
-    for byte_idx in 0..full_bytes {
-        let byte = packed[byte_idx];
+    for (byte_idx, &byte) in packed.iter().enumerate().take(full_bytes) {
         let base = byte_idx * 8;
 
         codes[base] = byte & 1;
@@ -129,18 +128,49 @@ pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> f32 {
     let mut sum = 0.0f32;
 
     let full_bytes = dim / 8;
-    for byte_idx in 0..full_bytes {
-        let byte = codes[byte_idx];
+    for (byte_idx, &byte) in codes.iter().enumerate().take(full_bytes) {
         let base = byte_idx * 8;
 
-        sum += if byte & 1 != 0 { query[base] } else { -query[base] };
-        sum += if byte & 2 != 0 { query[base + 1] } else { -query[base + 1] };
-        sum += if byte & 4 != 0 { query[base + 2] } else { -query[base + 2] };
-        sum += if byte & 8 != 0 { query[base + 3] } else { -query[base + 3] };
-        sum += if byte & 16 != 0 { query[base + 4] } else { -query[base + 4] };
-        sum += if byte & 32 != 0 { query[base + 5] } else { -query[base + 5] };
-        sum += if byte & 64 != 0 { query[base + 6] } else { -query[base + 6] };
-        sum += if byte & 128 != 0 { query[base + 7] } else { -query[base + 7] };
+        sum += if byte & 1 != 0 {
+            query[base]
+        } else {
+            -query[base]
+        };
+        sum += if byte & 2 != 0 {
+            query[base + 1]
+        } else {
+            -query[base + 1]
+        };
+        sum += if byte & 4 != 0 {
+            query[base + 2]
+        } else {
+            -query[base + 2]
+        };
+        sum += if byte & 8 != 0 {
+            query[base + 3]
+        } else {
+            -query[base + 3]
+        };
+        sum += if byte & 16 != 0 {
+            query[base + 4]
+        } else {
+            -query[base + 4]
+        };
+        sum += if byte & 32 != 0 {
+            query[base + 5]
+        } else {
+            -query[base + 5]
+        };
+        sum += if byte & 64 != 0 {
+            query[base + 6]
+        } else {
+            -query[base + 6]
+        };
+        sum += if byte & 128 != 0 {
+            query[base + 7]
+        } else {
+            -query[base + 7]
+        };
     }
 
     let remaining = dim % 8;
@@ -177,7 +207,10 @@ pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
 
 #[inline]
 pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> Vec<f32> {
-    codes.iter().map(|c| asymmetric_l2_squared(query, c)).collect()
+    codes
+        .iter()
+        .map(|c| asymmetric_l2_squared(query, c))
+        .collect()
 }
 
 /// Pack extended codes (ex_bits per element) using bit interleaving.
@@ -283,7 +316,7 @@ mod tests {
     fn test_pack_unpack_extended_interleaved() {
         let codes: Vec<u16> = vec![3, 1, 7, 0, 5, 2, 6, 4];
         let ex_bits = 3;
-        let packed_size = (codes.len() * ex_bits + 7) / 8;
+        let packed_size = (codes.len() * ex_bits).div_ceil(8);
         let mut packed = vec![0u8; packed_size];
 
         pack_extended_interleaved(&codes, &mut packed, ex_bits);
@@ -303,4 +336,3 @@ mod tests {
         assert_eq!(distances, vec![0, 4, 8]);
     }
 }
-

@@ -361,4 +361,3 @@ mod tests {
     // Intentionally no cosine-distance tests here:
     // ternary quantization is primarily about code representation and combinators.
 }
-

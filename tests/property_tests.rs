@@ -5,7 +5,7 @@ use qntz::simd_ops;
 proptest! {
     #[test]
     fn prop_pack_unpack_binary_roundtrip(codes in prop::collection::vec(prop_oneof![Just(0u8), Just(1u8)], 0..256)) {
-        let packed_len = (codes.len() + 7) / 8;
+        let packed_len = codes.len().div_ceil(8);
         let mut packed = vec![0u8; packed_len];
         simd_ops::pack_binary_fast(&codes, &mut packed);
 
@@ -112,4 +112,3 @@ mod rabitq_props {
         }
     }
 }
-

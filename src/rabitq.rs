@@ -219,7 +219,8 @@ impl RaBitQQuantizer {
         // Step 5: total codes
         let mut total_codes = vec![0u16; dim];
         for i in 0..dim {
-            total_codes[i] = extended_codes_unpacked[i] + ((binary_codes_unpacked[i] as u16) << ex_bits);
+            total_codes[i] =
+                extended_codes_unpacked[i] + ((binary_codes_unpacked[i] as u16) << ex_bits);
         }
 
         // Step 6: correction factors
@@ -323,7 +324,8 @@ impl RaBitQQuantizer {
             let ratio = ((l2_sqr * xu_cb_norm_sqr) / (denom * denom)) - 1.0;
             if ratio.is_finite() && ratio > 0.0 {
                 const K_CONST_EPSILON: f32 = 1.9;
-                tmp_error = l2_norm * K_CONST_EPSILON * ((ratio / ((dim - 1) as f32)).max(0.0)).sqrt();
+                tmp_error =
+                    l2_norm * K_CONST_EPSILON * ((ratio / ((dim - 1) as f32)).max(0.0)).sqrt();
             }
         }
 
@@ -335,7 +337,11 @@ impl RaBitQQuantizer {
     }
 
     /// Approximate L2 distance squared.
-    pub fn approximate_l2_sqr(&self, query: &[f32], quantized: &QuantizedVector) -> crate::Result<f32> {
+    pub fn approximate_l2_sqr(
+        &self,
+        query: &[f32],
+        quantized: &QuantizedVector,
+    ) -> crate::Result<f32> {
         if query.len() != self.dimension {
             return Err(VQuantError::DimensionMismatch {
                 expected: self.dimension,
@@ -364,7 +370,11 @@ impl RaBitQQuantizer {
         Ok(dist.max(0.0))
     }
 
-    pub fn approximate_distance(&self, query: &[f32], quantized: &QuantizedVector) -> crate::Result<f32> {
+    pub fn approximate_distance(
+        &self,
+        query: &[f32],
+        quantized: &QuantizedVector,
+    ) -> crate::Result<f32> {
         Ok(self.approximate_l2_sqr(query, quantized)?.sqrt())
     }
 }
@@ -695,4 +705,3 @@ mod tests {
         assert_eq!(quantized.ex_bits, 7);
     }
 }
-
