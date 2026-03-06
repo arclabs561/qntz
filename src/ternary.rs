@@ -1,6 +1,31 @@
 //! Ternary (1.58-bit) quantization.
 //!
-//! Each dimension is quantized to \(\{-1, 0, +1\}\) and stored as packed 2-bit codes.
+//! Each dimension is quantized to {-1, 0, +1} and stored as packed 2-bit codes.
+//! Configurable thresholds control which values map to zero (the "dead zone"),
+//! and adaptive fitting can target a desired sparsity level.
+//!
+//! # Example
+//!
+//! ```rust
+//! use qntz::ternary::{TernaryQuantizer, TernaryConfig, ternary_hamming};
+//!
+//! let config = TernaryConfig {
+//!     threshold_high: 0.3,
+//!     threshold_low: -0.3,
+//!     normalize: false,
+//!     target_sparsity: None,
+//! };
+//! let quantizer = TernaryQuantizer::new(4, config);
+//!
+//! let a = quantizer.quantize(&[0.5, -0.5, 0.1, -0.1]).unwrap();
+//! assert_eq!(a.get(0),  1);  // 0.5  > 0.3  -> +1
+//! assert_eq!(a.get(1), -1);  // -0.5 < -0.3 -> -1
+//! assert_eq!(a.get(2),  0);  // 0.1  in dead zone
+//! assert_eq!(a.get(3),  0);  // -0.1 in dead zone
+//!
+//! let b = quantizer.quantize(&[0.5, 0.5, 0.0, -0.5]).unwrap();
+//! assert_eq!(ternary_hamming(&a, &b), Some(2));
+//! ```
 
 use crate::VQuantError;
 

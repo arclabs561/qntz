@@ -1,6 +1,32 @@
 //! RaBitQ (Randomized Binary Quantization).
 //!
-//! This module is extracted from `jin` as a low-level, reusable primitive.
+//! Quantizes each dimension using a sign bit plus optional extended bits (up to
+//! 8-bit total), with a random rotation for decorrelation and correction factors
+//! for approximate L2 distance.
+//!
+//! # Example
+//!
+//! ```rust
+//! use qntz::rabitq::{RaBitQQuantizer, RaBitQConfig};
+//!
+//! let dim = 32;
+//! let quantizer = RaBitQQuantizer::with_config(
+//!     dim,
+//!     42,
+//!     RaBitQConfig::bits4(),
+//! ).unwrap();
+//!
+//! let vector: Vec<f32> = (0..dim).map(|i| (i as f32).sin()).collect();
+//! let quantized = quantizer.quantize(&vector).unwrap();
+//!
+//! assert_eq!(quantized.dimension, dim);
+//! assert_eq!(quantized.ex_bits, 3); // 4-bit total = 1 sign + 3 extended
+//!
+//! // Approximate L2 distance from a query
+//! let query: Vec<f32> = (0..dim).map(|i| (i as f32).cos()).collect();
+//! let dist = quantizer.approximate_distance(&query, &quantized).unwrap();
+//! assert!(dist >= 0.0);
+//! ```
 
 use crate::VQuantError;
 
