@@ -22,6 +22,45 @@ proptest! {
         let dba = simd_ops::hamming_distance(&b, &a);
         prop_assert_eq!(dab, dba);
     }
+
+    #[test]
+    fn prop_extended_pack_roundtrip(
+        dim in 1usize..128,
+        ex_bits in 1usize..8,
+    ) {
+        let max_val = (1u16 << ex_bits) - 1;
+        let codes: Vec<u16> = (0..dim).map(|i| (i as u16) % (max_val + 1)).collect();
+        let packed_len = (dim * ex_bits).div_ceil(8);
+        let mut packed = vec![0u8; packed_len];
+        simd_ops::pack_extended_interleaved(&codes, &mut packed, ex_bits);
+        let mut unpacked = vec![0u16; dim];
+        simd_ops::unpack_extended_interleaved(&packed, &mut unpacked, dim, ex_bits);
+        prop_assert_eq!(&codes, &unpacked);
+    }
+
+    #[test]
+    fn prop_hamming_triangle_inequality(
+        a in prop::collection::vec(any::<u8>(), 1..64),
+    ) {
+        let b: Vec<u8> = a.iter().map(|&x| x.wrapping_add(1)).collect();
+        let c: Vec<u8> = a.iter().map(|&x| x.wrapping_add(2)).collect();
+        let d_ab = simd_ops::hamming_distance(&a, &b);
+        let d_bc = simd_ops::hamming_distance(&b, &c);
+        let d_ac = simd_ops::hamming_distance(&a, &c);
+        prop_assert!(d_ac <= d_ab + d_bc,
+            "triangle inequality violated: d(a,c)={} > d(a,b)={} + d(b,c)={}", d_ac, d_ab, d_bc);
+    }
+
+    #[test]
+    fn prop_asymmetric_l2_nonneg(
+        query in prop::collection::vec(-100.0f32..100.0, 8..128),
+    ) {
+        let dim = query.len();
+        let packed_len = dim.div_ceil(8);
+        let codes = vec![0xFFu8; packed_len];
+        let l2 = simd_ops::asymmetric_l2_squared(&query[..dim], &codes);
+        prop_assert!(l2 >= 0.0, "L2 squared distance is negative: {}", l2);
+    }
 }
 
 #[cfg(feature = "ternary")]
@@ -47,7 +86,7 @@ mod ternary_props {
             let q = quantizer.quantize(&v).unwrap();
 
             prop_assert_eq!(q.dimension(), dim);
-            prop_assert!(q.memory_bytes() <= (dim + 3) / 4);
+            prop_assert!(q.memory_bytes() <= dim.div_ceil(4));
 
             for i in 0..dim {
                 let val = q.get(i);
@@ -55,7 +94,7 @@ mod ternary_props {
             }
 
             let s = q.sparsity();
-            prop_assert!(s >= 0.0 && s <= 1.0);
+            prop_assert!((0.0..=1.0).contains(&s));
         }
     }
 }
@@ -94,8 +133,8 @@ mod rabitq_props {
             let q = quantizer.quantize(&v).unwrap();
 
             let ex_bits = total_bits.saturating_sub(1);
-            let expected_binary_len = (dim + 7) / 8;
-            let expected_extended_len = if ex_bits == 0 { 0 } else { (dim * ex_bits + 7) / 8 };
+            let expected_binary_len = dim.div_ceil(8);
+            let expected_extended_len = if ex_bits == 0 { 0 } else { (dim * ex_bits).div_ceil(8) };
 
             prop_assert_eq!(q.binary_codes.len(), expected_binary_len);
             prop_assert_eq!(q.extended_codes.len(), expected_extended_len);

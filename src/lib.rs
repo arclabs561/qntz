@@ -41,12 +41,20 @@ pub type Result<T> = std::result::Result<T, VQuantError>;
 /// Errors for quantization code operations.
 #[derive(Debug, Error)]
 pub enum VQuantError {
+    /// Dimension or element count mismatch.
     #[error("dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
 
-    #[error("empty index")]
-    EmptyIndex,
+    /// A configuration parameter is outside its valid range.
+    #[error("invalid config: {field} -- {reason}")]
+    InvalidConfig {
+        /// Which parameter.
+        field: &'static str,
+        /// Why it is invalid.
+        reason: &'static str,
+    },
 
+    /// Catch-all for errors that don't have a dedicated variant yet.
     #[error("{0}")]
     Other(String),
 }

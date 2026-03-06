@@ -27,6 +27,7 @@ impl Default for RaBitQConfig {
 
 impl RaBitQConfig {
     /// Binary quantization (1-bit per dimension).
+    #[must_use]
     pub fn binary() -> Self {
         Self {
             total_bits: 1,
@@ -35,6 +36,7 @@ impl RaBitQConfig {
     }
 
     /// 4-bit quantization (default, good balance).
+    #[must_use]
     pub fn bits4() -> Self {
         Self {
             total_bits: 4,
@@ -43,6 +45,7 @@ impl RaBitQConfig {
     }
 
     /// 8-bit quantization (high accuracy).
+    #[must_use]
     pub fn bits8() -> Self {
         Self {
             total_bits: 8,
@@ -52,6 +55,7 @@ impl RaBitQConfig {
 
     /// Create config with precomputed scaling factor for faster quantization.
     /// Trades <1% accuracy for substantially faster quantization.
+    #[must_use]
     pub fn with_const_scaling(self, dimension: usize, seed: u64) -> Self {
         let ex_bits = self.total_bits.saturating_sub(1);
         let t_const = if ex_bits > 0 {
@@ -110,10 +114,16 @@ impl RaBitQQuantizer {
     /// Create quantizer with specific config.
     pub fn with_config(dimension: usize, seed: u64, config: RaBitQConfig) -> crate::Result<Self> {
         if dimension == 0 {
-            return Err(VQuantError::Other("dimension must be > 0".into()));
+            return Err(VQuantError::InvalidConfig {
+                field: "dimension",
+                reason: "must be > 0",
+            });
         }
         if config.total_bits == 0 || config.total_bits > 8 {
-            return Err(VQuantError::Other("total_bits must be 1-8".into()));
+            return Err(VQuantError::InvalidConfig {
+                field: "total_bits",
+                reason: "must be 1-8",
+            });
         }
 
         let rotation = generate_orthogonal_rotation(dimension, seed);
@@ -134,11 +144,10 @@ impl RaBitQQuantizer {
     /// Fit quantizer on training vectors (computes centroid).
     pub fn fit(&mut self, vectors: &[f32], num_vectors: usize) -> crate::Result<()> {
         if vectors.len() != num_vectors * self.dimension {
-            return Err(VQuantError::Other(format!(
-                "expected {} floats, got {}",
-                num_vectors * self.dimension,
-                vectors.len()
-            )));
+            return Err(VQuantError::DimensionMismatch {
+                expected: num_vectors * self.dimension,
+                got: vectors.len(),
+            });
         }
 
         let mut centroid = vec![0.0f32; self.dimension];
@@ -370,6 +379,9 @@ impl RaBitQQuantizer {
         Ok(dist.max(0.0))
     }
 
+    /// Approximate Euclidean distance (L2) between a query and a quantized vector.
+    ///
+    /// This is the square root of [`approximate_l2_sqr`](Self::approximate_l2_sqr).
     pub fn approximate_distance(
         &self,
         query: &[f32],
@@ -658,13 +670,13 @@ fn generate_orthogonal_rotation(dimension: usize, seed: u64) -> Vec<f32> {
 
 fn apply_rotation(vector: &[f32], rotation: &[f32], dimension: usize) -> Vec<f32> {
     let mut result = vec![0.0f32; dimension];
-    for i in 0..dimension {
+    for (i, out) in result.iter_mut().enumerate() {
         let row_start = i * dimension;
         let mut sum = 0.0;
         for j in 0..dimension {
             sum += rotation[row_start + j] * vector[j];
         }
-        result[i] = sum;
+        *out = sum;
     }
     result
 }
@@ -703,5 +715,25 @@ mod tests {
         let quantized = quantizer.quantize(&vector).unwrap();
 
         assert_eq!(quantized.ex_bits, 7);
+    }
+
+    #[test]
+    fn quantize_preserves_dimension() {
+        let dim = 64;
+        let q = RaBitQQuantizer::binary(dim, 42).unwrap();
+        let vector = vec![1.0f32; dim];
+        let qv = q.quantize(&vector).unwrap();
+        assert_eq!(qv.dimension, dim);
+    }
+
+    #[test]
+    fn approximate_distance_nonneg() {
+        let dim = 32;
+        let q = RaBitQQuantizer::binary(dim, 42).unwrap();
+        let v1 = vec![1.0f32; dim];
+        let v2 = vec![0.5f32; dim];
+        let qv = q.quantize(&v1).unwrap();
+        let dist = q.approximate_distance(&v2, &qv).unwrap();
+        assert!(dist >= 0.0, "distance should be non-negative: {}", dist);
     }
 }

@@ -5,12 +5,12 @@ Vector quantization primitives for ANN systems.
 Scope: small, reusable pieces (bit packing, low-bit codes) that higher-level ANN
 crates can build on. This crate intentionally does **not** implement full indices.
 
-## Features
+## Quickstart
 
-- `rabitq`: RaBitQ-style 1-bit codes (when enabled)
-- `ternary`: ternary codes (when enabled)
-
-## Example
+```toml
+[dependencies]
+qntz = "0.1.0"
+```
 
 ```rust
 use qntz::simd_ops::{hamming_distance, pack_binary_fast};
@@ -28,3 +28,5 @@ let d = hamming_distance(&a_packed, &b_packed);
 assert_eq!(d, 2);
 ```
 
+## Features- `rabitq`: RaBitQ-style 1-bit codes (when enabled)
+- `ternary`: ternary codes (when enabled)

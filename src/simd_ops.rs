@@ -3,7 +3,10 @@
 //! The name says “simd”, but the implementation is portable and relies on
 //! `count_ones` on integer words (which is typically compiled to POPCNT).
 
-/// Pack binary codes (0/1) into bytes.
+/// Pack binary codes (0/1 bytes) into a bitfield.
+///
+/// Each input byte is treated as a boolean: nonzero becomes a set bit.
+/// Output length must be `ceil(codes.len() / 8)`.
 #[inline]
 pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
     let full_bytes = codes.len() / 8;
@@ -53,6 +56,9 @@ pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
     }
 }
 
+/// Unpack a bitfield back into one byte per bit (0 or 1).
+///
+/// Inverse of [`pack_binary_fast`]. `dim` is the number of codes to extract.
 #[inline]
 pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) {
     let full_bytes = dim / 8;
@@ -81,7 +87,10 @@ pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) {
 }
 
 /// Hamming distance between two packed bit-vectors.
+///
+/// Counts the number of differing bits across `min(a.len(), b.len())` bytes.
 #[inline]
+#[must_use]
 pub fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
     let mut dist = 0u32;
     let len = a.len().min(b.len());
@@ -119,10 +128,11 @@ pub fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
     dist
 }
 
-/// Compute asymmetric inner product: f32 query vs packed 1-bit codes.
+/// Asymmetric inner product: f32 query vs packed 1-bit codes.
 ///
-/// Convention: if bit is 1 -> +1, else -> -1.
+/// Convention: `bit=1 -> +1`, `bit=0 -> -1`.
 #[inline]
+#[must_use]
 pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> f32 {
     let dim = query.len();
     let mut sum = 0.0f32;
@@ -186,13 +196,10 @@ pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> f32 {
     sum
 }
 
-/// Compute asymmetric L2 distance squared:
-///
-/// \[
-/// \|q - b\|^2 = \|q\|^2 + D - 2\langle q, b\rangle
-/// \]
-/// where \(b \in \{-1,+1\}^D\).
+/// Asymmetric L2 distance squared: `||q - b||^2 = ||q||^2 + D - 2<q, b>`
+/// where `b in {-1,+1}^D`.
 #[inline]
+#[must_use]
 pub fn asymmetric_l2_squared(query: &[f32], codes: &[u8]) -> f32 {
     let dim = query.len();
     let query_norm_sq: f32 = query.iter().map(|x| x * x).sum();
@@ -200,12 +207,16 @@ pub fn asymmetric_l2_squared(query: &[f32], codes: &[u8]) -> f32 {
     query_norm_sq + dim as f32 - 2.0 * ip
 }
 
+/// Batch Hamming distances from `query` to each element in `codes`.
 #[inline]
+#[must_use]
 pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
     codes.iter().map(|c| hamming_distance(query, c)).collect()
 }
 
+/// Batch asymmetric L2 squared distances from `query` to each element in `codes`.
 #[inline]
+#[must_use]
 pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> Vec<f32> {
     codes
         .iter()
@@ -213,7 +224,9 @@ pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> Vec<f32> {
         .collect()
 }
 
-/// Pack extended codes (ex_bits per element) using bit interleaving.
+/// Pack extended codes (`ex_bits` per element) into a bitfield.
+///
+/// Output length must be `ceil(codes.len() * ex_bits / 8)`.
 #[inline]
 pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usize) {
     if ex_bits == 0 {
@@ -234,6 +247,9 @@ pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usiz
     }
 }
 
+/// Unpack extended codes from a bitfield.
+///
+/// Inverse of [`pack_extended_interleaved`]. Extracts `dim` codes of `ex_bits` each.
 #[inline]
 pub fn unpack_extended_interleaved(packed: &[u8], codes: &mut [u16], dim: usize, ex_bits: usize) {
     if ex_bits == 0 {
@@ -258,8 +274,10 @@ pub fn unpack_extended_interleaved(packed: &[u8], codes: &mut [u16], dim: usize,
 
 /// Inner product with multi-bit quantized codes.
 ///
-/// Each code is centered at \((2^{bits}-1)/2\).
+/// Each code is centered at `(2^bits - 1) / 2`, so code 0 maps to `-center`
+/// and the max code maps to `+center`.
 #[inline]
+#[must_use]
 pub fn multibit_inner_product(query: &[f32], codes: &[u16], total_bits: usize) -> f32 {
     let center = ((1 << total_bits) as f32 - 1.0) / 2.0;
     query
@@ -334,5 +352,47 @@ mod tests {
 
         let distances = batch_hamming_distances(&query, &codes);
         assert_eq!(distances, vec![0, 4, 8]);
+    }
+
+    #[test]
+    fn hamming_empty() {
+        assert_eq!(hamming_distance(&[], &[]), 0);
+    }
+
+    #[test]
+    fn hamming_identical() {
+        let a = vec![0xABu8; 100];
+        assert_eq!(hamming_distance(&a, &a), 0);
+    }
+
+    #[test]
+    fn hamming_opposite() {
+        let a = vec![0x00u8; 1];
+        let b = vec![0xFFu8; 1];
+        assert_eq!(hamming_distance(&a, &b), 8);
+    }
+
+    #[test]
+    fn asymmetric_ip_sign_convention() {
+        // Verify that bit=1 -> +1, bit=0 -> -1
+        let query = vec![1.0f32; 8]; // all positive
+        let codes_all_ones = vec![0xFFu8]; // all +1
+        let codes_all_zeros = vec![0x00u8]; // all -1
+        let ip_ones = asymmetric_inner_product(&query, &codes_all_ones);
+        let ip_zeros = asymmetric_inner_product(&query, &codes_all_zeros);
+        assert!(ip_ones > 0.0, "all +1 codes should give positive IP");
+        assert!(ip_zeros < 0.0, "all -1 codes should give negative IP");
+        assert_eq!(ip_ones, -ip_zeros, "should be symmetric around 0");
+    }
+
+    #[test]
+    fn multibit_ip_centering() {
+        // With total_bits=1, codes in {0,1} centered at 0.5
+        // So code=0 -> -0.5, code=1 -> +0.5
+        let query = vec![2.0f32; 4];
+        let codes = vec![1u16, 0, 1, 0]; // +0.5, -0.5, +0.5, -0.5
+        let ip = multibit_inner_product(&query, &codes, 1);
+        // Expected: 2*0.5 + 2*(-0.5) + 2*0.5 + 2*(-0.5) = 0
+        assert!((ip - 0.0).abs() < 1e-6, "multibit IP centering: got {}", ip);
     }
 }
