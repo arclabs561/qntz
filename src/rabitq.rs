@@ -736,4 +736,49 @@ mod tests {
         let dist = q.approximate_distance(&v2, &qv).unwrap();
         assert!(dist >= 0.0, "distance should be non-negative: {}", dist);
     }
+
+    // ---- error case tests ----
+
+    #[test]
+    fn dimension_zero_rejected() {
+        assert!(RaBitQQuantizer::new(0, 42).is_err());
+    }
+
+    #[test]
+    fn bits_zero_rejected() {
+        let config = RaBitQConfig {
+            total_bits: 0,
+            t_const: None,
+        };
+        assert!(RaBitQQuantizer::with_config(32, 42, config).is_err());
+    }
+
+    #[test]
+    fn bits_over_8_rejected() {
+        let config = RaBitQConfig {
+            total_bits: 9,
+            t_const: None,
+        };
+        assert!(RaBitQQuantizer::with_config(32, 42, config).is_err());
+    }
+
+    #[test]
+    fn fit_dimension_mismatch() {
+        let mut q = RaBitQQuantizer::binary(8, 42).unwrap();
+        // 10 floats for 2 vectors of dimension 8 -> mismatch
+        let data = vec![1.0f32; 10];
+        assert!(q.fit(&data, 2).is_err());
+    }
+
+    #[test]
+    fn set_centroid_dimension_mismatch() {
+        let mut q = RaBitQQuantizer::binary(8, 42).unwrap();
+        assert!(q.set_centroid(vec![0.0f32; 4]).is_err());
+    }
+
+    #[test]
+    fn quantize_dimension_mismatch() {
+        let q = RaBitQQuantizer::binary(8, 42).unwrap();
+        assert!(q.quantize(&[1.0f32; 4]).is_err());
+    }
 }

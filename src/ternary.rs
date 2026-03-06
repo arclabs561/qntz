@@ -338,11 +338,12 @@ pub fn asymmetric_cosine_distance(query: &[f32], quantized: &TernaryVector) -> f
 /// Hamming distance between two ternary vectors.
 ///
 /// Counts positions where the ternary values differ.
-/// Returns `max(a.dimension, b.dimension)` on dimension mismatch.
+///
+/// Returns `None` if the vectors have different dimensions.
 #[must_use]
-pub fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> usize {
+pub fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> Option<usize> {
     if a.dimension != b.dimension {
-        return a.dimension.max(b.dimension);
+        return None;
     }
 
     let mut diff = 0;
@@ -351,7 +352,7 @@ pub fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> usize {
             diff += 1;
         }
     }
-    diff
+    Some(diff)
 }
 
 #[cfg(test)]
@@ -404,7 +405,7 @@ mod tests {
         let q1 = quantizer.quantize(&v1).unwrap();
         let q2 = quantizer.quantize(&v2).unwrap();
 
-        assert_eq!(ternary_hamming(&q1, &q2), 2);
+        assert_eq!(ternary_hamming(&q1, &q2), Some(2));
     }
 
     #[test]
@@ -489,5 +490,58 @@ mod tests {
             "zero vector: sim {sim} out of [-1, 1]"
         );
         assert_eq!(sim, 0.0, "similarity with zero vector should be 0.0");
+    }
+
+    // ---- error case tests ----
+
+    #[test]
+    fn quantize_dimension_mismatch() {
+        let tq = TernaryQuantizer::with_dimension(8);
+        assert!(tq.quantize(&[1.0f32; 4]).is_err());
+    }
+
+    #[test]
+    fn fit_dimension_mismatch() {
+        let mut tq = TernaryQuantizer::with_dimension(8);
+        // 10 floats for 2 vectors of dimension 8 -> mismatch
+        assert!(tq.fit(&[1.0f32; 10], 2).is_err());
+    }
+
+    #[test]
+    fn hamming_dimension_mismatch_returns_none() {
+        let config = TernaryConfig {
+            normalize: false,
+            ..TernaryConfig::default()
+        };
+        let tq4 = TernaryQuantizer::new(4, config.clone());
+        let tq8 = TernaryQuantizer::new(8, config);
+
+        let a = tq4.quantize(&[1.0; 4]).unwrap();
+        let b = tq8.quantize(&[1.0; 8]).unwrap();
+
+        assert_eq!(ternary_hamming(&a, &b), None);
+    }
+
+    #[test]
+    fn inner_product_dimension_mismatch_returns_zero() {
+        let config = TernaryConfig {
+            normalize: false,
+            ..TernaryConfig::default()
+        };
+        let tq4 = TernaryQuantizer::new(4, config.clone());
+        let tq8 = TernaryQuantizer::new(8, config);
+
+        let a = tq4.quantize(&[1.0; 4]).unwrap();
+        let b = tq8.quantize(&[1.0; 8]).unwrap();
+
+        assert_eq!(ternary_inner_product(&a, &b), 0);
+    }
+
+    #[test]
+    fn asymmetric_ip_dimension_mismatch_returns_zero() {
+        let tq = TernaryQuantizer::with_dimension(8);
+        let q = tq.quantize(&[1.0; 8]).unwrap();
+        // query dimension 4 != quantized dimension 8
+        assert_eq!(asymmetric_inner_product(&[1.0f32; 4], &q), 0.0);
     }
 }

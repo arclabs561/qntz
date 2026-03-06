@@ -7,10 +7,10 @@ proptest! {
     fn prop_pack_unpack_binary_roundtrip(codes in prop::collection::vec(prop_oneof![Just(0u8), Just(1u8)], 0..256)) {
         let packed_len = codes.len().div_ceil(8);
         let mut packed = vec![0u8; packed_len];
-        simd_ops::pack_binary_fast(&codes, &mut packed);
+        simd_ops::pack_binary_fast(&codes, &mut packed).unwrap();
 
         let mut unpacked = vec![0u8; codes.len()];
-        simd_ops::unpack_binary_fast(&packed, &mut unpacked, codes.len());
+        simd_ops::unpack_binary_fast(&packed, &mut unpacked, codes.len()).unwrap();
 
         prop_assert_eq!(unpacked, codes);
     }
@@ -58,7 +58,7 @@ proptest! {
         let dim = query.len();
         let packed_len = dim.div_ceil(8);
         let codes = vec![0xFFu8; packed_len];
-        let l2 = simd_ops::asymmetric_l2_squared(&query[..dim], &codes);
+        let l2 = simd_ops::asymmetric_l2_squared(&query[..dim], &codes).unwrap();
         prop_assert!(l2 >= 0.0, "L2 squared distance is negative: {}", l2);
     }
 }

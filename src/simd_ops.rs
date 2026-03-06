@@ -3,12 +3,28 @@
 //! The name says “simd”, but the implementation is portable and relies on
 //! `count_ones` on integer words (which is typically compiled to POPCNT).
 
+use crate::VQuantError;
+
 /// Pack binary codes (0/1 bytes) into a bitfield.
 ///
 /// Each input byte is treated as a boolean: nonzero becomes a set bit.
-/// Output length must be `ceil(codes.len() / 8)`.
+///
+/// # Buffer requirements
+///
+/// `packed.len()` must be at least `codes.len().div_ceil(8)`.
+///
+/// # Errors
+///
+/// Returns [`VQuantError::DimensionMismatch`] if the output buffer is too small.
 #[inline]
-pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
+pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) -> crate::Result<()> {
+    let required = codes.len().div_ceil(8);
+    if packed.len() < required {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required,
+            got: packed.len(),
+        });
+    }
     let full_bytes = codes.len() / 8;
 
     for (byte_idx, packed_byte) in packed.iter_mut().enumerate().take(full_bytes) {
@@ -54,13 +70,37 @@ pub fn pack_binary_fast(codes: &[u8], packed: &mut [u8]) {
         }
         packed[full_bytes] = byte;
     }
+
+    Ok(())
 }
 
 /// Unpack a bitfield back into one byte per bit (0 or 1).
 ///
 /// Inverse of [`pack_binary_fast`]. `dim` is the number of codes to extract.
+///
+/// # Buffer requirements
+///
+/// - `packed.len()` must be at least `dim.div_ceil(8)`.
+/// - `codes.len()` must be at least `dim`.
+///
+/// # Errors
+///
+/// Returns [`VQuantError::DimensionMismatch`] if either buffer is too small.
 #[inline]
-pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) {
+pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) -> crate::Result<()> {
+    let required_packed = dim.div_ceil(8);
+    if packed.len() < required_packed {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required_packed,
+            got: packed.len(),
+        });
+    }
+    if codes.len() < dim {
+        return Err(VQuantError::DimensionMismatch {
+            expected: dim,
+            got: codes.len(),
+        });
+    }
     let full_bytes = dim / 8;
 
     for (byte_idx, &byte) in packed.iter().enumerate().take(full_bytes) {
@@ -84,11 +124,15 @@ pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) {
             codes[base + i] = (byte >> i) & 1;
         }
     }
+
+    Ok(())
 }
 
 /// Hamming distance between two packed bit-vectors.
 ///
 /// Counts the number of differing bits across `min(a.len(), b.len())` bytes.
+/// Trailing bytes in the longer slice are ignored. Both slices may be empty
+/// (returns 0).
 #[inline]
 #[must_use]
 pub fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
@@ -131,10 +175,25 @@ pub fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
 /// Asymmetric inner product: f32 query vs packed 1-bit codes.
 ///
 /// Convention: `bit=1 -> +1`, `bit=0 -> -1`.
+///
+/// # Buffer requirements
+///
+/// `codes.len()` must be at least `query.len().div_ceil(8)`.
+///
+/// # Errors
+///
+/// Returns [`VQuantError::DimensionMismatch`] if the codes buffer is too small
+/// for the query dimension.
 #[inline]
-#[must_use]
-pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> f32 {
+pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> crate::Result<f32> {
     let dim = query.len();
+    let required = dim.div_ceil(8);
+    if codes.len() < required {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required,
+            got: codes.len(),
+        });
+    }
     let mut sum = 0.0f32;
 
     let full_bytes = dim / 8;
@@ -193,21 +252,28 @@ pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> f32 {
         }
     }
 
-    sum
+    Ok(sum)
 }
 
 /// Asymmetric L2 distance squared: `||q - b||^2 = ||q||^2 + D - 2<q, b>`
 /// where `b in {-1,+1}^D`.
+///
+/// # Errors
+///
+/// Returns [`VQuantError::DimensionMismatch`] if the codes buffer is too small
+/// for the query dimension (see [`asymmetric_inner_product`]).
 #[inline]
-#[must_use]
-pub fn asymmetric_l2_squared(query: &[f32], codes: &[u8]) -> f32 {
+pub fn asymmetric_l2_squared(query: &[f32], codes: &[u8]) -> crate::Result<f32> {
     let dim = query.len();
     let query_norm_sq: f32 = query.iter().map(|x| x * x).sum();
-    let ip = asymmetric_inner_product(query, codes);
-    query_norm_sq + dim as f32 - 2.0 * ip
+    let ip = asymmetric_inner_product(query, codes)?;
+    Ok(query_norm_sq + dim as f32 - 2.0 * ip)
 }
 
 /// Batch Hamming distances from `query` to each element in `codes`.
+///
+/// Returns one `u32` per element, using `min(query.len(), code.len())` bytes
+/// for each comparison.
 #[inline]
 #[must_use]
 pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
@@ -215,9 +281,13 @@ pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
 }
 
 /// Batch asymmetric L2 squared distances from `query` to each element in `codes`.
+///
+/// # Errors
+///
+/// Returns the first [`VQuantError::DimensionMismatch`] encountered if any
+/// codes buffer is too small for the query dimension.
 #[inline]
-#[must_use]
-pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> Vec<f32> {
+pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> crate::Result<Vec<f32>> {
     codes
         .iter()
         .map(|c| asymmetric_l2_squared(query, c))
@@ -226,7 +296,13 @@ pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> Vec<f32> {
 
 /// Pack extended codes (`ex_bits` per element) into a bitfield.
 ///
-/// Output length must be `ceil(codes.len() * ex_bits / 8)`.
+/// Each code is masked to its low `ex_bits` bits before packing.
+/// No-op when `ex_bits == 0`.
+///
+/// # Buffer requirements
+///
+/// `packed.len()` must be at least `(codes.len() * ex_bits).div_ceil(8)`.
+/// Bits beyond the buffer length are silently dropped.
 #[inline]
 pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usize) {
     if ex_bits == 0 {
@@ -249,7 +325,15 @@ pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usiz
 
 /// Unpack extended codes from a bitfield.
 ///
-/// Inverse of [`pack_extended_interleaved`]. Extracts `dim` codes of `ex_bits` each.
+/// Inverse of [`pack_extended_interleaved`]. Extracts `dim` codes of `ex_bits`
+/// each from `packed`. When `ex_bits == 0`, fills output codes with zeros.
+///
+/// # Buffer requirements
+///
+/// - `packed.len()` must be at least `(dim * ex_bits).div_ceil(8)`.
+/// - `codes.len()` must be at least `dim`.
+///
+/// Bits beyond the packed buffer are read as zero.
 #[inline]
 pub fn unpack_extended_interleaved(packed: &[u8], codes: &mut [u16], dim: usize, ex_bits: usize) {
     if ex_bits == 0 {
@@ -295,10 +379,10 @@ mod tests {
     fn pack_unpack_binary_roundtrip() {
         let codes = vec![1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1];
         let mut packed = vec![0u8; 2];
-        pack_binary_fast(&codes, &mut packed);
+        pack_binary_fast(&codes, &mut packed).unwrap();
 
         let mut unpacked = vec![0u8; 16];
-        unpack_binary_fast(&packed, &mut unpacked, 16);
+        unpack_binary_fast(&packed, &mut unpacked, 16).unwrap();
 
         assert_eq!(codes, unpacked);
     }
@@ -314,11 +398,11 @@ mod tests {
     fn test_asymmetric_inner_product() {
         let query = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
         let codes = vec![0b11111111];
-        let ip = asymmetric_inner_product(&query, &codes);
+        let ip = asymmetric_inner_product(&query, &codes).unwrap();
         assert!((ip - 8.0).abs() < 1e-6);
 
         let codes_neg = vec![0b00000000];
-        let ip_neg = asymmetric_inner_product(&query, &codes_neg);
+        let ip_neg = asymmetric_inner_product(&query, &codes_neg).unwrap();
         assert!((ip_neg - (-8.0)).abs() < 1e-6);
     }
 
@@ -378,8 +462,8 @@ mod tests {
         let query = vec![1.0f32; 8]; // all positive
         let codes_all_ones = vec![0xFFu8]; // all +1
         let codes_all_zeros = vec![0x00u8]; // all -1
-        let ip_ones = asymmetric_inner_product(&query, &codes_all_ones);
-        let ip_zeros = asymmetric_inner_product(&query, &codes_all_zeros);
+        let ip_ones = asymmetric_inner_product(&query, &codes_all_ones).unwrap();
+        let ip_zeros = asymmetric_inner_product(&query, &codes_all_zeros).unwrap();
         assert!(ip_ones > 0.0, "all +1 codes should give positive IP");
         assert!(ip_zeros < 0.0, "all -1 codes should give negative IP");
         assert_eq!(ip_ones, -ip_zeros, "should be symmetric around 0");
@@ -394,5 +478,56 @@ mod tests {
         let ip = multibit_inner_product(&query, &codes, 1);
         // Expected: 2*0.5 + 2*(-0.5) + 2*0.5 + 2*(-0.5) = 0
         assert!((ip - 0.0).abs() < 1e-6, "multibit IP centering: got {}", ip);
+    }
+
+    // ---- error case tests ----
+
+    #[test]
+    fn pack_binary_undersized_output() {
+        let codes = vec![1u8; 16]; // needs 2 bytes
+        let mut packed = vec![0u8; 1]; // only 1 byte
+        assert!(pack_binary_fast(&codes, &mut packed).is_err());
+    }
+
+    #[test]
+    fn unpack_binary_undersized_packed() {
+        let packed = vec![0u8; 1]; // only 8 bits
+        let mut codes = vec![0u8; 16];
+        assert!(unpack_binary_fast(&packed, &mut codes, 16).is_err());
+    }
+
+    #[test]
+    fn unpack_binary_undersized_output() {
+        let packed = vec![0u8; 2];
+        let mut codes = vec![0u8; 8]; // needs 16
+        assert!(unpack_binary_fast(&packed, &mut codes, 16).is_err());
+    }
+
+    #[test]
+    fn asymmetric_ip_undersized_codes() {
+        let query = vec![1.0f32; 16]; // needs 2 bytes of codes
+        let codes = vec![0xFFu8; 1]; // only 1 byte
+        assert!(asymmetric_inner_product(&query, &codes).is_err());
+    }
+
+    #[test]
+    fn asymmetric_l2_undersized_codes() {
+        let query = vec![1.0f32; 16];
+        let codes = vec![0xFFu8; 1];
+        assert!(asymmetric_l2_squared(&query, &codes).is_err());
+    }
+
+    #[test]
+    fn pack_binary_empty() {
+        let codes: Vec<u8> = vec![];
+        let mut packed: Vec<u8> = vec![];
+        pack_binary_fast(&codes, &mut packed).unwrap();
+    }
+
+    #[test]
+    fn unpack_binary_empty() {
+        let packed: Vec<u8> = vec![];
+        let mut codes: Vec<u8> = vec![];
+        unpack_binary_fast(&packed, &mut codes, 0).unwrap();
     }
 }
