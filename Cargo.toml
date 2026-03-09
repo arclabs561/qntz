@@ -21,4 +21,10 @@ rabitq = []
 ternary = []
 
 [dev-dependencies]
+ans = "0.1"
 proptest = "1.9"
+
+[[example]]
+name = "entropy_coded_quantization"
+path = "examples/entropy_coded_quantization.rs"
+required-features = ["rabitq"]
