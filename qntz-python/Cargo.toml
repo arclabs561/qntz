@@ -1,0 +1,23 @@
+[package]
+name = "qntz-python"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+authors = ["Arc <attobop@gmail.com>"]
+description = "Python bindings for qntz (Rust)."
+repository = "https://github.com/arclabs561/qntz"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "qntz"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+qntz_core = { path = "..", package = "qntz", features = ["rabitq", "ternary"] }
+pyo3 = "0.28"
+
+[workspace]
+resolver = "2"
