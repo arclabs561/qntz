@@ -1,3 +1,8 @@
 target/
 Cargo.lock
 
+
+# Python bindings build artifacts
+qntz-python/target/
+qntz-python/.venv/
+qntz-python/Cargo.lock
