@@ -25,6 +25,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+dependencies = ["numpy>=1.21"]
+
 [project.urls]
 Homepage = "https://github.com/arclabs561/qntz"
 Documentation = "https://docs.rs/qntz"
