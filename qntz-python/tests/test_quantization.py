@@ -409,3 +409,65 @@ class TestTernary:
         r = repr(tv)
         assert r.startswith("TernaryVector(dimension=4")
         assert "sparsity=" in r
+
+
+# ---------------------------------------------------------------------------
+# batch operations
+# ---------------------------------------------------------------------------
+
+
+class TestBatchHammingDistances:
+    def test_basic(self):
+        query = [0xFF]
+        codes = [[0xFF], [0xF0], [0x00]]
+        dists = qntz.batch_hamming_distances(query, codes)
+        assert isinstance(dists, np.ndarray)
+        assert dists.dtype == np.uint32
+        assert list(dists) == [0, 4, 8]
+
+    def test_numpy_inputs(self):
+        query = np.array([0xFF], dtype=np.uint8)
+        codes = [
+            np.array([0xFF], dtype=np.uint8),
+            np.array([0x00], dtype=np.uint8),
+        ]
+        dists = qntz.batch_hamming_distances(query, codes)
+        assert list(dists) == [0, 8]
+
+    def test_empty_codes(self):
+        dists = qntz.batch_hamming_distances([0xFF], [])
+        assert len(dists) == 0
+
+    def test_mixed_inputs(self):
+        query = np.array([0xFF], dtype=np.uint8)
+        codes = [[0x00], np.array([0xF0], dtype=np.uint8)]
+        dists = qntz.batch_hamming_distances(query, codes)
+        assert list(dists) == [8, 4]
+
+
+class TestBatchAsymmetricL2:
+    def test_basic(self):
+        query = [1.0] * 8
+        codes = [[0xFF], [0x00]]
+        dists = qntz.batch_asymmetric_l2(query, codes)
+        assert isinstance(dists, np.ndarray)
+        assert dists.dtype == np.float32
+        assert len(dists) == 2
+        # all +1 codes: ||q - b||^2 = ||q||^2 + D - 2<q,b> = 8 + 8 - 16 = 0
+        assert abs(dists[0]) < 1e-6
+        # all -1 codes: ||q - b||^2 = 8 + 8 - 2*(-8) = 32
+        assert abs(dists[1] - 32.0) < 1e-5
+
+    def test_numpy_inputs(self):
+        query = np.array([1.0] * 8, dtype=np.float32)
+        codes = [np.array([0xFF], dtype=np.uint8)]
+        dists = qntz.batch_asymmetric_l2(query, codes)
+        assert abs(dists[0]) < 1e-6
+
+    def test_empty_codes(self):
+        dists = qntz.batch_asymmetric_l2([1.0] * 8, [])
+        assert len(dists) == 0
+
+    def test_dimension_mismatch(self):
+        with pytest.raises(ValueError):
+            qntz.batch_asymmetric_l2([1.0] * 16, [[0xFF]])

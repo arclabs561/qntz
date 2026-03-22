@@ -138,6 +138,45 @@ fn multibit_inner_product(query: &Bound<'_, PyAny>, codes: Vec<u16>, total_bits:
     Ok(qntz_core::simd_ops::multibit_inner_product(&query, &codes, total_bits))
 }
 
+/// Batch Hamming distances from a query to each element in a list of codes.
+///
+/// Returns a numpy uint32 array of distances.
+#[pyfunction]
+fn batch_hamming_distances<'py>(
+    py: Python<'py>,
+    query: &Bound<'py, PyAny>,
+    codes: Vec<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyArray1<u32>>> {
+    let query = extract_u8_vec(query)?;
+    let code_vecs: Vec<Vec<u8>> = codes
+        .iter()
+        .map(|c| extract_u8_vec(c))
+        .collect::<PyResult<_>>()?;
+    let code_refs: Vec<&[u8]> = code_vecs.iter().map(|v| v.as_slice()).collect();
+    let distances = qntz_core::simd_ops::batch_hamming_distances(&query, &code_refs);
+    Ok(PyArray1::from_vec(py, distances))
+}
+
+/// Batch asymmetric L2 squared distances from a query to each element in a list of codes.
+///
+/// Returns a numpy float32 array of distances.
+#[pyfunction]
+fn batch_asymmetric_l2<'py>(
+    py: Python<'py>,
+    query: &Bound<'py, PyAny>,
+    codes: Vec<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let query = extract_f32_vec(query)?;
+    let code_vecs: Vec<Vec<u8>> = codes
+        .iter()
+        .map(|c| extract_u8_vec(c))
+        .collect::<PyResult<_>>()?;
+    let code_refs: Vec<&[u8]> = code_vecs.iter().map(|v| v.as_slice()).collect();
+    let distances = qntz_core::simd_ops::batch_asymmetric_l2(&query, &code_refs)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PyArray1::from_vec(py, distances))
+}
+
 // ---------------------------------------------------------------------------
 // rabitq
 // ---------------------------------------------------------------------------
@@ -538,6 +577,8 @@ fn qntz(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(asymmetric_inner_product, m)?)?;
     m.add_function(wrap_pyfunction!(asymmetric_l2_squared, m)?)?;
     m.add_function(wrap_pyfunction!(multibit_inner_product, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_hamming_distances, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_asymmetric_l2, m)?)?;
 
     // rabitq
     m.add_class::<QuantizedVector>()?;
