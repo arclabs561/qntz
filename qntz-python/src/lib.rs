@@ -65,15 +65,15 @@ fn extract_training_data(
 /// Accepts a list of ints or a numpy uint8 array. Each value is treated as
 /// boolean: nonzero becomes a set bit.
 ///
-/// Returns the packed bytes as a list.
+/// Returns the packed bytes as a numpy uint8 array.
 #[pyfunction]
-fn pack_binary(codes: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+fn pack_binary<'py>(py: Python<'py>, codes: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<u8>>> {
     let codes = extract_u8_vec(codes)?;
     let required = codes.len().div_ceil(8);
     let mut packed = vec![0u8; required];
     qntz_core::simd_ops::pack_binary_fast(&codes, &mut packed)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(packed)
+    Ok(PyArray1::from_vec(py, packed))
 }
 
 /// Unpack a bitfield back into one byte per bit (0 or 1).
@@ -133,8 +133,9 @@ fn asymmetric_l2_squared(query: &Bound<'_, PyAny>, codes: &Bound<'_, PyAny>) -> 
 
 /// Multi-bit inner product with centered codes.
 #[pyfunction]
-fn multibit_inner_product(query: Vec<f32>, codes: Vec<u16>, total_bits: usize) -> f32 {
-    qntz_core::simd_ops::multibit_inner_product(&query, &codes, total_bits)
+fn multibit_inner_product(query: &Bound<'_, PyAny>, codes: Vec<u16>, total_bits: usize) -> PyResult<f32> {
+    let query = extract_f32_vec(query)?;
+    Ok(qntz_core::simd_ops::multibit_inner_product(&query, &codes, total_bits))
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +529,8 @@ fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> Option<usize> {
 
 #[pymodule]
 fn qntz(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", "0.1.0")?;
+
     // simd_ops
     m.add_function(wrap_pyfunction!(pack_binary, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_binary, m)?)?;

@@ -3,13 +3,17 @@ from typing import Optional, Union
 import numpy as np
 import numpy.typing as npt
 
+__version__: str
+
 # -- simd_ops --
 
-def pack_binary(codes: Union[list[int], npt.NDArray[np.uint8]]) -> list[int]:
+def pack_binary(codes: Union[list[int], npt.NDArray[np.uint8]]) -> npt.NDArray[np.uint8]:
     """Pack binary codes (0/1 values) into a bitfield.
 
     Accepts a list of ints or a numpy uint8 array. Each value is treated
     as boolean: nonzero becomes a set bit.
+
+    Returns the packed bytes as a numpy uint8 array.
     """
     ...
 
@@ -47,7 +51,7 @@ def asymmetric_l2_squared(
     ...
 
 def multibit_inner_product(
-    query: list[float], codes: list[int], total_bits: int
+    query: Union[list[float], npt.NDArray[np.float32]], codes: list[int], total_bits: int
 ) -> float:
     """Multi-bit inner product with centered codes."""
     ...
