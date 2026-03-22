@@ -416,8 +416,13 @@ impl TernaryVector {
     }
 
     /// Get the ternary value at index (returns -1, 0, or +1).
-    fn get(&self, idx: usize) -> i8 {
-        self.inner.get(idx)
+    fn get(&self, idx: usize) -> PyResult<i8> {
+        if idx >= self.inner.dimension() {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("index {} out of range for dimension {}", idx, self.inner.dimension())
+            ));
+        }
+        Ok(self.inner.get(idx))
     }
 
     /// Return all ternary values as a list.

@@ -471,3 +471,23 @@ class TestBatchAsymmetricL2:
     def test_dimension_mismatch(self):
         with pytest.raises(ValueError):
             qntz.batch_asymmetric_l2([1.0] * 16, [[0xFF]])
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_qntz_ternary_get_bounds_check():
+    """TernaryVector.get() with out-of-range index must raise IndexError."""
+    tq = qntz.TernaryQuantizer(dimension=8)
+    tv = tq.quantize([1.0, -1.0, 0.5, -0.5, 0.0, 0.8, -0.8, 0.3])
+    assert tv.dimension == 8
+    # Valid access
+    _ = tv.get(0)
+    _ = tv.get(7)
+    # Out of bounds
+    with pytest.raises(IndexError, match="out of range"):
+        tv.get(8)
+    with pytest.raises(IndexError, match="out of range"):
+        tv.get(100)
