@@ -62,6 +62,26 @@ def multibit_inner_product(
     """Multi-bit inner product with centered codes."""
     ...
 
+def batch_hamming_distances(
+    query: Union[list[int], bytes, npt.NDArray[np.uint8]],
+    codes: list[Union[list[int], bytes, npt.NDArray[np.uint8]]],
+) -> npt.NDArray[np.uint32]:
+    """Batch Hamming distances from query to each element in codes.
+
+    Returns a numpy uint32 array with one distance per code.
+    """
+    ...
+
+def batch_asymmetric_l2(
+    query: Union[list[float], npt.NDArray[np.float32]],
+    codes: list[Union[list[int], bytes, npt.NDArray[np.uint8]]],
+) -> npt.NDArray[np.float32]:
+    """Batch asymmetric L2 squared distances from query to each code.
+
+    Returns a numpy float32 array with one distance per code.
+    """
+    ...
+
 # -- rabitq --
 
 class QuantizedVector:
