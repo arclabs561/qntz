@@ -1,3 +1,9 @@
+"""Type stubs for qntz -- Python bindings to the qntz Rust crate.
+
+Note: NaN values in float inputs will propagate through quantization silently.
+Filter NaN before calling if this is not desired.
+"""
+
 from typing import Optional, Union
 
 import numpy as np
