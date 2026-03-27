@@ -19,6 +19,8 @@ thiserror = "2.0"
 default = []
 rabitq = []
 ternary = []
+distquant = []
+adaptive = []
 
 [dev-dependencies]
 ans = "0.1"

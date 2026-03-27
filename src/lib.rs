@@ -67,5 +67,13 @@ pub mod rabitq;
 /// Ternary quantization utilities (feature-gated).
 pub mod ternary;
 
+#[cfg(feature = "distquant")]
+/// Distributional quantization: optimal codebooks under distributional priors (feature-gated).
+pub mod distquant;
+
+#[cfg(feature = "adaptive")]
+/// Per-vector adaptive scalar quantization (feature-gated).
+pub mod adaptive;
+
 /// Bit packing + popcount-based operations for low-bit codes.
 pub mod simd_ops;
