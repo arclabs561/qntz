@@ -106,6 +106,7 @@ fn quantile(dist: Distribution, p: f64) -> f64 {
 }
 
 /// CDF for each distribution.
+#[cfg(test)]
 fn cdf(dist: Distribution, x: f64) -> f64 {
     match dist {
         Distribution::Gaussian => gaussian_cdf(x),
@@ -185,11 +186,13 @@ fn gaussian_quantile(p: f64) -> f64 {
 }
 
 /// Gaussian CDF via error function approximation.
+#[cfg(test)]
 fn gaussian_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
 }
 
 /// Error function approximation (Abramowitz & Stegun 7.1.26).
+#[cfg(test)]
 fn erf(x: f64) -> f64 {
     let sign = if x >= 0.0 { 1.0 } else { -1.0 };
     let x = x.abs();
