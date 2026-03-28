@@ -170,6 +170,197 @@ impl AdaptiveQuantizer {
     pub fn quantize_batch(&self, vectors: &[Vec<f32>]) -> Vec<AdaptiveQuantized> {
         vectors.iter().map(|v| self.quantize(v)).collect()
     }
+
+    /// Quantize multiple vectors into a packed batch representation.
+    ///
+    /// All vectors must have the same dimensionality. Returns an error if
+    /// dimensions are inconsistent, or `Ok` with a [`PackedBatch`] that stores
+    /// codes contiguously for cache-friendly scanning.
+    pub fn quantize_packed(&self, vectors: &[impl AsRef<[f32]>]) -> Result<PackedBatch> {
+        if vectors.is_empty() {
+            return Ok(PackedBatch {
+                codes: vec![],
+                scales: vec![],
+                offsets: vec![],
+                dim: 0,
+                bits: self.bits,
+            });
+        }
+        let dim = vectors[0].as_ref().len();
+        for (_i, v) in vectors.iter().enumerate().skip(1) {
+            if v.as_ref().len() != dim {
+                return Err(VQuantError::DimensionMismatch {
+                    expected: dim,
+                    got: v.as_ref().len(),
+                });
+            }
+        }
+
+        let n = vectors.len();
+        let mut codes = Vec::with_capacity(n * dim);
+        let mut scales = Vec::with_capacity(n);
+        let mut offsets = Vec::with_capacity(n);
+
+        for v in vectors {
+            let q = self.quantize(v.as_ref());
+            codes.extend_from_slice(&q.codes);
+            scales.push(q.scale);
+            offsets.push(q.offset);
+        }
+
+        Ok(PackedBatch {
+            codes,
+            scales,
+            offsets,
+            dim,
+            bits: self.bits,
+        })
+    }
+
+    /// Build a lookup table for fast asymmetric distance computation.
+    ///
+    /// For a given query vector and bit width, precomputes `(query[d] - recon)^2`
+    /// for every possible code value at each dimension. This avoids repeated
+    /// multiply-add in the inner loop when scanning many quantized vectors that
+    /// share the same scale/offset... but since adaptive quantization uses
+    /// per-vector scale/offset, the table must be rebuilt per document vector.
+    ///
+    /// For scanning a [`PackedBatch`], use [`PackedBatch::asymmetric_distances`]
+    /// which handles this internally.
+    pub fn build_distance_table(
+        query: &[f32],
+        quantized: &AdaptiveQuantized,
+    ) -> Vec<f32> {
+        let num_codes = 1usize << quantized.bits;
+        let dim = query.len();
+        let max_code = (num_codes - 1) as f32;
+        let step = if quantized.scale == 0.0 {
+            0.0
+        } else {
+            quantized.scale / max_code
+        };
+        let offset = quantized.offset;
+
+        let mut table = Vec::with_capacity(dim * num_codes);
+        for d in 0..dim {
+            let q = query[d];
+            for c in 0..num_codes {
+                let recon = (c as f32) * step + offset;
+                let diff = q - recon;
+                table.push(diff * diff);
+            }
+        }
+        table
+    }
+
+    /// Asymmetric L2 squared distance using a precomputed lookup table.
+    ///
+    /// The table must have been built for the same query and the same
+    /// scale/offset as the quantized vector. This is a building block for
+    /// batch scanning; for single-vector distance, [`asymmetric_distance`] is
+    /// simpler.
+    pub fn distance_from_table(
+        table: &[f32],
+        quantized: &AdaptiveQuantized,
+    ) -> f32 {
+        let num_codes = 1usize << quantized.bits;
+        quantized
+            .codes
+            .iter()
+            .enumerate()
+            .map(|(d, &c)| {
+                // table layout: [dim0_code0, dim0_code1, ..., dim1_code0, ...]
+                table[d * num_codes + c as usize]
+            })
+            .sum()
+    }
+}
+
+/// Packed representation of multiple quantized vectors.
+///
+/// Codes are stored contiguously in row-major order: vector 0's codes first,
+/// then vector 1's, etc. Each vector has its own scale and offset.
+#[derive(Clone, Debug)]
+pub struct PackedBatch {
+    /// Flat code array: `codes[i * dim .. (i+1) * dim]` for vector `i`.
+    pub codes: Vec<u8>,
+    /// Per-vector scales.
+    pub scales: Vec<f32>,
+    /// Per-vector offsets.
+    pub offsets: Vec<f32>,
+    /// Dimensionality of each vector.
+    pub dim: usize,
+    /// Bits per code.
+    pub bits: u8,
+}
+
+impl PackedBatch {
+    /// Number of vectors in the batch.
+    pub fn len(&self) -> usize {
+        self.scales.len()
+    }
+
+    /// Whether the batch is empty.
+    pub fn is_empty(&self) -> bool {
+        self.scales.is_empty()
+    }
+
+    /// Compute asymmetric L2 squared distances from a query to all vectors.
+    ///
+    /// Returns one distance per vector. The query must have the same
+    /// dimensionality as the stored vectors.
+    pub fn asymmetric_distances(&self, query: &[f32]) -> Result<Vec<f32>> {
+        if !self.is_empty() && query.len() != self.dim {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dim,
+                got: query.len(),
+            });
+        }
+
+        let n = self.len();
+        let dim = self.dim;
+        let num_codes = 1usize << self.bits;
+        let mut distances = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let scale = self.scales[i];
+            let offset = self.offsets[i];
+            let max_code = (num_codes - 1) as f32;
+            let step = if scale == 0.0 { 0.0 } else { scale / max_code };
+
+            let codes_start = i * dim;
+            let mut dist = 0.0f32;
+            for d in 0..dim {
+                let c = self.codes[codes_start + d];
+                let recon = (c as f32) * step + offset;
+                let diff = query[d] - recon;
+                dist += diff * diff;
+            }
+            distances.push(dist);
+        }
+
+        Ok(distances)
+    }
+
+    /// Dequantize a single vector from the batch by index.
+    ///
+    /// Returns `None` if `index >= len()`.
+    pub fn dequantize(&self, index: usize) -> Option<Vec<f32>> {
+        if index >= self.len() {
+            return None;
+        }
+        let dim = self.dim;
+        let max_code = ((1u32 << self.bits) - 1) as f32;
+        let scale = self.scales[index];
+        let offset = self.offsets[index];
+        let step = if scale == 0.0 { 0.0 } else { scale / max_code };
+
+        let codes_start = index * dim;
+        let vec = (0..dim)
+            .map(|d| (self.codes[codes_start + d] as f32) * step + offset)
+            .collect();
+        Some(vec)
+    }
 }
 
 #[cfg(test)]
@@ -334,6 +525,136 @@ mod tests {
     }
 
     #[test]
+    fn test_packed_batch_roundtrip() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let vectors: Vec<Vec<f32>> = (0..10)
+            .map(|j| (0..32).map(|i| (i as f32 + j as f32) * 0.1 - 1.0).collect())
+            .collect();
+
+        let packed = quantizer.quantize_packed(&vectors).unwrap();
+        assert_eq!(packed.len(), 10);
+        assert_eq!(packed.codes.len(), 10 * 32);
+
+        for (idx, orig) in vectors.iter().enumerate() {
+            let recon = packed.dequantize(idx).unwrap();
+            let err_sq: f32 = orig
+                .iter()
+                .zip(recon.iter())
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            let norm_sq: f32 = orig.iter().map(|x| x * x).sum();
+            assert!(
+                err_sq < 0.005 * norm_sq + 1e-8,
+                "packed roundtrip error too high at vector {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_packed_batch_dimension_mismatch() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let vectors: Vec<Vec<f32>> = vec![vec![1.0, 2.0, 3.0], vec![1.0, 2.0]];
+        assert!(quantizer.quantize_packed(&vectors).is_err());
+    }
+
+    #[test]
+    fn test_packed_batch_empty() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let empty: Vec<Vec<f32>> = vec![];
+        let packed = quantizer.quantize_packed(&empty).unwrap();
+        assert!(packed.is_empty());
+        assert_eq!(packed.len(), 0);
+    }
+
+    #[test]
+    fn test_packed_asymmetric_distances() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.07 - 1.0).collect();
+        let docs: Vec<Vec<f32>> = (0..5)
+            .map(|j| (0..32).map(|i| (i as f32 + j as f32) * 0.1 - 0.5).collect())
+            .collect();
+
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let dists = packed.asymmetric_distances(&query).unwrap();
+        assert_eq!(dists.len(), 5);
+
+        // Compare against individual asymmetric_distance calls.
+        for (j, doc) in docs.iter().enumerate() {
+            let single_q = quantizer.quantize(doc);
+            let single_dist = AdaptiveQuantizer::asymmetric_distance(&query, &single_q);
+            let rel_diff = (dists[j] - single_dist).abs() / (single_dist + 1e-12);
+            assert!(
+                rel_diff < 1e-5,
+                "packed vs single distance mismatch at vector {j}: {} vs {}",
+                dists[j],
+                single_dist
+            );
+        }
+    }
+
+    #[test]
+    fn test_packed_asymmetric_distance_dimension_mismatch() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let docs = vec![vec![1.0, 2.0, 3.0]];
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let wrong_query = vec![1.0, 2.0];
+        assert!(packed.asymmetric_distances(&wrong_query).is_err());
+    }
+
+    #[test]
+    fn test_distance_table_matches_direct() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let query: Vec<f32> = (0..16).map(|i| (i as f32) * 0.2 - 1.5).collect();
+        let doc: Vec<f32> = (0..16).map(|i| (i as f32) * 0.15 - 1.0).collect();
+
+        let quantized = quantizer.quantize(&doc);
+        let direct = AdaptiveQuantizer::asymmetric_distance(&query, &quantized);
+        let table = AdaptiveQuantizer::build_distance_table(&query, &quantized);
+        let via_table = AdaptiveQuantizer::distance_from_table(&table, &quantized);
+
+        assert!(
+            (direct - via_table).abs() < 1e-6,
+            "table distance {} != direct distance {}",
+            via_table,
+            direct
+        );
+    }
+
+    #[test]
+    fn test_dequantize_out_of_bounds() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let docs = vec![vec![1.0, 2.0]];
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        assert!(packed.dequantize(0).is_some());
+        assert!(packed.dequantize(1).is_none());
+    }
+
+    #[test]
+    fn test_asymmetric_distance_accuracy_by_bits() {
+        // Higher bits should give distance closer to true distance.
+        let query: Vec<f32> = (0..64).map(|i| (i as f32 * 0.1) - 3.0).collect();
+        let doc: Vec<f32> = (0..64).map(|i| (i as f32 * 0.12) - 2.5).collect();
+        let true_dist: f32 = query
+            .iter()
+            .zip(doc.iter())
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum();
+
+        let mut prev_err = f32::INFINITY;
+        for bits in [2, 4, 8] {
+            let quantizer = AdaptiveQuantizer::new(bits).unwrap();
+            let quantized = quantizer.quantize(&doc);
+            let approx = AdaptiveQuantizer::asymmetric_distance(&query, &quantized);
+            let err = (approx - true_dist).abs();
+            assert!(
+                err < prev_err,
+                "{bits}-bit error {err} >= previous {prev_err}"
+            );
+            prev_err = err;
+        }
+    }
+
+    #[test]
     fn test_more_bits_lower_error() {
         let vector: Vec<f32> = (0..128).map(|i| (i as f32 * 0.05) - 3.0).collect();
         let norm_sq: f32 = vector.iter().map(|x| x * x).sum();
@@ -420,6 +741,50 @@ mod proptests {
             for &c in &quantized.codes {
                 prop_assert!(c <= max_code, "code {c} exceeds max {max_code}");
             }
+        }
+
+        #[test]
+        fn packed_matches_individual(
+            vectors in proptest::collection::vec(arb_vector(32), 2..10),
+            bits in 1u8..=8,
+        ) {
+            let quantizer = AdaptiveQuantizer::new(bits).unwrap();
+            let individual: Vec<_> = vectors.iter().map(|v| quantizer.quantize(v)).collect();
+            let packed = quantizer.quantize_packed(&vectors).unwrap();
+
+            prop_assert_eq!(packed.len(), individual.len());
+
+            let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.1).collect();
+            let packed_dists = packed.asymmetric_distances(&query).unwrap();
+
+            for (i, ind) in individual.iter().enumerate() {
+                let ind_dist = AdaptiveQuantizer::asymmetric_distance(&query, ind);
+                let diff = (packed_dists[i] - ind_dist).abs();
+                prop_assert!(
+                    diff < 1e-4,
+                    "vector {i}: packed dist {} vs individual dist {}, diff {diff}",
+                    packed_dists[i],
+                    ind_dist
+                );
+            }
+        }
+
+        #[test]
+        fn distance_table_matches_direct(
+            query in arb_vector(32),
+            doc in arb_vector(32),
+            bits in 1u8..=8,
+        ) {
+            let quantizer = AdaptiveQuantizer::new(bits).unwrap();
+            let quantized = quantizer.quantize(&doc);
+            let direct = AdaptiveQuantizer::asymmetric_distance(&query, &quantized);
+            let table = AdaptiveQuantizer::build_distance_table(&query, &quantized);
+            let via_table = AdaptiveQuantizer::distance_from_table(&table, &quantized);
+            let diff = (direct - via_table).abs();
+            prop_assert!(
+                diff < 1e-4,
+                "table dist {via_table} != direct dist {direct}, diff {diff}"
+            );
         }
     }
 }
