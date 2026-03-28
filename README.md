@@ -1,9 +1,6 @@
 # qntz
 
-Vector quantization primitives for ANN systems.
-
-Scope: small, reusable pieces (bit packing, low-bit codes) that higher-level ANN
-crates can build on. This crate intentionally does **not** implement full indices.
+Vector quantization.
 
 ## Quickstart
 
