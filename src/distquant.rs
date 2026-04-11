@@ -140,7 +140,7 @@ fn gaussian_quantile(p: f64) -> f64 {
         -3.969_683_028_665_376e1,
         2.209_460_984_245_205e2,
         -2.759_285_104_469_687e2,
-        1.383_577_518_672_690e2,
+        1.383_577_518_672_69e2,
         -3.066_479_806_614_716e1,
         2.506_628_277_459_239,
     ];
@@ -348,7 +348,7 @@ pub fn pack_codes(codes: &[u32], bits: u8) -> Vec<u64> {
     }
 
     let codes_per_word = 64 / bits as usize;
-    let n_words = (codes.len() + codes_per_word - 1) / codes_per_word;
+    let n_words = codes.len().div_ceil(codes_per_word);
     let mask = (1u64 << bits) - 1;
 
     let mut packed = vec![0u64; n_words];
@@ -656,8 +656,8 @@ pub fn lloyd_max_codebook(dist: LloydMaxDist, levels: usize) -> Result<LloydMaxC
     if !even {
         representatives.push(0.0);
     }
-    for i in 0..h {
-        representatives.push(pos_r[i]);
+    for r in pos_r.iter().take(h) {
+        representatives.push(*r);
     }
 
     if even {
@@ -665,15 +665,15 @@ pub fn lloyd_max_codebook(dist: LloydMaxDist, levels: usize) -> Result<LloydMaxC
             boundaries.push(-pos_b[i]);
         }
         boundaries.push(0.0);
-        for i in 0..nb {
-            boundaries.push(pos_b[i]);
+        for b in pos_b.iter().take(nb) {
+            boundaries.push(*b);
         }
     } else {
         for i in (0..nb).rev() {
             boundaries.push(-pos_b[i]);
         }
-        for i in 0..nb {
-            boundaries.push(pos_b[i]);
+        for b in pos_b.iter().take(nb) {
+            boundaries.push(*b);
         }
     }
 
@@ -984,7 +984,10 @@ mod tests {
     #[test]
     fn lloyd_max_gaussian_four_level() {
         let cb = lloyd_max_codebook(LloydMaxDist::Gaussian, 4).unwrap();
-        assert!(cb.boundaries[1].abs() < 1e-6, "middle boundary should be ~0");
+        assert!(
+            cb.boundaries[1].abs() < 1e-6,
+            "middle boundary should be ~0"
+        );
         assert!((cb.boundaries[2] - 0.9816).abs() < 0.01);
         assert!((cb.representatives[3] - 1.510).abs() < 0.01);
         assert!((cb.representatives[2] - 0.4528).abs() < 0.01);
