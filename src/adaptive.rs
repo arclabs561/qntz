@@ -227,10 +227,7 @@ impl AdaptiveQuantizer {
     ///
     /// For scanning a [`PackedBatch`], use [`PackedBatch::asymmetric_distances`]
     /// which handles this internally.
-    pub fn build_distance_table(
-        query: &[f32],
-        quantized: &AdaptiveQuantized,
-    ) -> Vec<f32> {
+    pub fn build_distance_table(query: &[f32], quantized: &AdaptiveQuantized) -> Vec<f32> {
         let num_codes = 1usize << quantized.bits;
         let dim = query.len();
         let max_code = (num_codes - 1) as f32;
@@ -242,8 +239,7 @@ impl AdaptiveQuantizer {
         let offset = quantized.offset;
 
         let mut table = Vec::with_capacity(dim * num_codes);
-        for d in 0..dim {
-            let q = query[d];
+        for &q in query.iter().take(dim) {
             for c in 0..num_codes {
                 let recon = (c as f32) * step + offset;
                 let diff = q - recon;
@@ -257,12 +253,9 @@ impl AdaptiveQuantizer {
     ///
     /// The table must have been built for the same query and the same
     /// scale/offset as the quantized vector. This is a building block for
-    /// batch scanning; for single-vector distance, [`asymmetric_distance`] is
+    /// batch scanning; for single-vector distance, [`AdaptiveQuantizer::asymmetric_distance`] is
     /// simpler.
-    pub fn distance_from_table(
-        table: &[f32],
-        quantized: &AdaptiveQuantized,
-    ) -> f32 {
+    pub fn distance_from_table(table: &[f32], quantized: &AdaptiveQuantized) -> f32 {
         let num_codes = 1usize << quantized.bits;
         quantized
             .codes
@@ -330,10 +323,10 @@ impl PackedBatch {
 
             let codes_start = i * dim;
             let mut dist = 0.0f32;
-            for d in 0..dim {
+            for (d, &q) in query.iter().enumerate().take(dim) {
                 let c = self.codes[codes_start + d];
                 let recon = (c as f32) * step + offset;
-                let diff = query[d] - recon;
+                let diff = q - recon;
                 dist += diff * diff;
             }
             distances.push(dist);
