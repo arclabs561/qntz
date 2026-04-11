@@ -75,5 +75,9 @@ pub mod distquant;
 /// Per-vector adaptive scalar quantization (feature-gated).
 pub mod adaptive;
 
+#[cfg(feature = "binary")]
+/// Rotation-based binary quantization (feature-gated).
+pub mod binary;
+
 /// Bit packing + popcount-based operations for low-bit codes.
 pub mod simd_ops;
