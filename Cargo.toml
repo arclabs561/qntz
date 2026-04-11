@@ -23,6 +23,7 @@ rabitq = []
 ternary = []
 distquant = []
 adaptive = []
+binary = []
 
 [dev-dependencies]
 ans = "0.1"
