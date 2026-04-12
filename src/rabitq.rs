@@ -371,6 +371,46 @@ impl RaBitQQuantizer {
         (f_add, f_rescale, f_error, l2_norm)
     }
 
+    /// Pre-rotate a query vector for use with [`approximate_l2_sqr_prerotated`].
+    ///
+    /// Subtracts the centroid (if set) and applies the rotation matrix.
+    /// Call this once per query, then use the result for multiple distance
+    /// computations to avoid redundant O(d^2) rotation per candidate.
+    pub fn rotate_query(&self, query: &[f32]) -> crate::Result<Vec<f32>> {
+        if query.len() != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: query.len(),
+            });
+        }
+        let default_centroid = vec![0.0f32; self.dimension];
+        let centroid = self.centroid.as_deref().unwrap_or(&default_centroid);
+        let residual: Vec<f32> = query
+            .iter()
+            .zip(centroid.iter())
+            .map(|(q, c)| q - c)
+            .collect();
+        Ok(apply_rotation(&residual, &self.rotation, self.dimension))
+    }
+
+    /// Approximate L2 distance squared using a pre-rotated query.
+    ///
+    /// Use with [`rotate_query`](Self::rotate_query) to amortize the O(d^2)
+    /// rotation cost across multiple distance computations.
+    #[inline]
+    pub fn approximate_l2_sqr_prerotated(
+        rotated_query: &[f32],
+        quantized: &QuantizedVector,
+    ) -> f32 {
+        let cb = -((1 << quantized.ex_bits) as f32 - 0.5);
+        let mut ip = 0.0f32;
+        for (i, &q) in rotated_query.iter().enumerate() {
+            let code_val = quantized.codes[i] as f32 + cb;
+            ip += q * code_val;
+        }
+        (quantized.f_add + quantized.f_rescale * ip).max(0.0)
+    }
+
     /// Approximate L2 distance squared.
     pub fn approximate_l2_sqr(
         &self,
