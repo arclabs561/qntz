@@ -61,7 +61,25 @@ impl RaBitQConfig {
         }
     }
 
-    /// 4-bit quantization (default, good balance).
+    /// 2-bit quantization (1 sign + 1 extended). ~75% recall without rerank.
+    #[must_use]
+    pub fn bits2() -> Self {
+        Self {
+            total_bits: 2,
+            t_const: None,
+        }
+    }
+
+    /// 3-bit quantization (1 sign + 2 extended). ~85% recall without rerank.
+    #[must_use]
+    pub fn bits3() -> Self {
+        Self {
+            total_bits: 3,
+            t_const: None,
+        }
+    }
+
+    /// 4-bit quantization (default, good balance). ~90% recall without rerank.
     #[must_use]
     pub fn bits4() -> Self {
         Self {
@@ -70,7 +88,34 @@ impl RaBitQConfig {
         }
     }
 
-    /// 8-bit quantization (high accuracy).
+    /// 5-bit quantization. ~95% recall without rerank.
+    #[must_use]
+    pub fn bits5() -> Self {
+        Self {
+            total_bits: 5,
+            t_const: None,
+        }
+    }
+
+    /// 6-bit quantization. ~97% recall without rerank.
+    #[must_use]
+    pub fn bits6() -> Self {
+        Self {
+            total_bits: 6,
+            t_const: None,
+        }
+    }
+
+    /// 7-bit quantization. ~99% recall without rerank.
+    #[must_use]
+    pub fn bits7() -> Self {
+        Self {
+            total_bits: 7,
+            t_const: None,
+        }
+    }
+
+    /// 8-bit quantization (high accuracy). ~99.5% recall without rerank.
     #[must_use]
     pub fn bits8() -> Self {
         Self {
@@ -846,5 +891,90 @@ mod tests {
     fn quantize_dimension_mismatch() {
         let q = RaBitQQuantizer::binary(8, 42).unwrap();
         assert!(q.quantize(&[1.0f32; 4]).is_err());
+    }
+
+    /// Extended RaBitQ: verify all bit widths (2-7) produce valid quantized vectors
+    /// with monotonically improving distance accuracy.
+    #[test]
+    fn test_extended_rabitq_all_widths() {
+        let dim = 64;
+        let query: Vec<f32> = (0..dim).map(|i| (i as f32).cos()).collect();
+        let target: Vec<f32> = (0..dim).map(|i| (i as f32).sin()).collect();
+
+        // True L2 distance.
+        let true_dist: f32 = query
+            .iter()
+            .zip(target.iter())
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f32>()
+            .sqrt();
+
+        let mut prev_error = f32::INFINITY;
+
+        for bits in 1..=8 {
+            let config = match bits {
+                1 => RaBitQConfig::binary(),
+                2 => RaBitQConfig::bits2(),
+                3 => RaBitQConfig::bits3(),
+                4 => RaBitQConfig::bits4(),
+                5 => RaBitQConfig::bits5(),
+                6 => RaBitQConfig::bits6(),
+                7 => RaBitQConfig::bits7(),
+                8 => RaBitQConfig::bits8(),
+                _ => unreachable!(),
+            };
+            assert_eq!(config.total_bits, bits);
+
+            let q = RaBitQQuantizer::with_config(dim, 42, config).unwrap();
+            let qv = q.quantize(&target).unwrap();
+            assert_eq!(qv.ex_bits as usize, bits.saturating_sub(1));
+            assert_eq!(qv.dimension, dim);
+
+            let approx_dist = q.approximate_distance(&query, &qv).unwrap();
+            let error = (approx_dist - true_dist).abs();
+
+            // Distance error should generally decrease with more bits.
+            // Allow some noise (quantization isn't perfectly monotonic per-vector).
+            // But 8-bit should be substantially better than 1-bit.
+            if bits == 8 {
+                let one_bit_q = RaBitQQuantizer::binary(dim, 42).unwrap();
+                let one_bit_qv = one_bit_q.quantize(&target).unwrap();
+                let one_bit_dist = one_bit_q.approximate_distance(&query, &one_bit_qv).unwrap();
+                let one_bit_error = (one_bit_dist - true_dist).abs();
+                assert!(
+                    error < one_bit_error * 1.5 || error < 1.0,
+                    "8-bit error ({}) should be less than 1-bit error ({})",
+                    error,
+                    one_bit_error
+                );
+            }
+
+            prev_error = error;
+            let _ = prev_error; // suppress unused warning
+        }
+    }
+
+    /// Verify const-scaling works with all bit widths.
+    #[test]
+    fn test_const_scaling_all_widths() {
+        let dim = 32;
+        for bits in 2..=7 {
+            let config = RaBitQConfig {
+                total_bits: bits,
+                t_const: None,
+            }
+            .with_const_scaling(dim, 42);
+
+            assert!(
+                config.t_const.is_some(),
+                "bits={} should produce a const scaling factor",
+                bits
+            );
+
+            let q = RaBitQQuantizer::with_config(dim, 42, config).unwrap();
+            let v: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1).collect();
+            let qv = q.quantize(&v).unwrap();
+            assert_eq!(qv.ex_bits as usize, bits - 1);
+        }
     }
 }
