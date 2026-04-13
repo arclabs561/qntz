@@ -259,19 +259,22 @@ impl RaBitQQuantizer {
         }
 
         // Step 6: correction factors
-        let (f_add, f_rescale, f_error, residual_norm) =
-            self.compute_correction_factors(&rotated, centroid, &binary_codes_unpacked);
-
-        // Step 7: delta/vl
+        // Use the full multi-bit centered codes so that f_rescale and the
+        // query-time IP (which uses codes[i] + cb) are computed with the
+        // same xu vector.  For binary (ex_bits=0), cb = -0.5 and
+        // codes[i] ∈ {0,1}, so xu_multibit[i] = codes[i] - 0.5 = b_i - 0.5,
+        // identical to the old binary path.
         let cb = -((1 << ex_bits) as f32 - 0.5);
-        let quantized_shifted: Vec<f32> =
-            total_codes.iter().map(|&code| code as f32 + cb).collect();
+        let xu_multibit: Vec<f32> = total_codes.iter().map(|&c| c as f32 + cb).collect();
+        let (f_add, f_rescale, f_error, residual_norm) =
+            self.compute_correction_factors(&rotated, centroid, &xu_multibit);
 
-        let norm_quan_sqr: f32 = quantized_shifted.iter().map(|x| x * x).sum();
+        // Step 7: delta/vl (xu_multibit == quantized_shifted, reuse it)
+        let norm_quan_sqr: f32 = xu_multibit.iter().map(|x| x * x).sum();
         let norm_residual_sqr: f32 = rotated.iter().map(|x| x * x).sum();
         let dot_rq: f32 = rotated
             .iter()
-            .zip(quantized_shifted.iter())
+            .zip(xu_multibit.iter())
             .map(|(r, q)| r * q)
             .sum();
 
@@ -334,12 +337,9 @@ impl RaBitQQuantizer {
         &self,
         residual: &[f32],
         centroid: &[f32],
-        binary_codes: &[u8],
+        xu_cb: &[f32],
     ) -> (f32, f32, f32, f32) {
         let dim = self.dimension;
-
-        // centered binary codes
-        let xu_cb: Vec<f32> = binary_codes.iter().map(|&bit| bit as f32 - 0.5).collect();
 
         let l2_sqr: f32 = residual.iter().map(|x| x * x).sum();
         let l2_norm = l2_sqr.sqrt();
