@@ -16,9 +16,11 @@ categories = ["algorithms", "science"]
 
 [dependencies]
 thiserror = "2.0"
+innr = { version = "0.2.4", optional = true }
 
 [features]
 default = []
+simd = ["dep:innr"]
 rabitq = []
 ternary = []
 distquant = []

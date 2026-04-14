@@ -270,23 +270,30 @@ fn apply_rotation_rect(
     let mut result = vec![0.0f32; projected_dim];
     for (i, out) in result.iter_mut().enumerate() {
         let row = &rotation[i * dim..(i + 1) * dim];
-        let chunks = dim / 4;
-        let mut s0 = 0.0f32;
-        let mut s1 = 0.0f32;
-        let mut s2 = 0.0f32;
-        let mut s3 = 0.0f32;
-        for c in 0..chunks {
-            let b = c * 4;
-            s0 += row[b] * vector[b];
-            s1 += row[b + 1] * vector[b + 1];
-            s2 += row[b + 2] * vector[b + 2];
-            s3 += row[b + 3] * vector[b + 3];
+        #[cfg(feature = "simd")]
+        {
+            *out = innr::dot(row, vector);
         }
-        let mut sum = (s0 + s1) + (s2 + s3);
-        for j in (chunks * 4)..dim {
-            sum += row[j] * vector[j];
+        #[cfg(not(feature = "simd"))]
+        {
+            let chunks = dim / 4;
+            let mut s0 = 0.0f32;
+            let mut s1 = 0.0f32;
+            let mut s2 = 0.0f32;
+            let mut s3 = 0.0f32;
+            for c in 0..chunks {
+                let b = c * 4;
+                s0 += row[b] * vector[b];
+                s1 += row[b + 1] * vector[b + 1];
+                s2 += row[b + 2] * vector[b + 2];
+                s3 += row[b + 3] * vector[b + 3];
+            }
+            let mut sum = (s0 + s1) + (s2 + s3);
+            for j in (chunks * 4)..dim {
+                sum += row[j] * vector[j];
+            }
+            *out = sum;
         }
-        *out = sum;
     }
     result
 }

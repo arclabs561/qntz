@@ -727,14 +727,22 @@ fn generate_orthogonal_rotation(dimension: usize, seed: u64) -> Vec<f32> {
 }
 
 fn apply_rotation(vector: &[f32], rotation: &[f32], dimension: usize) -> Vec<f32> {
-    let mut result = vec![0.0f32; dimension];
+    let nrows = rotation.len() / dimension;
+    let mut result = vec![0.0f32; nrows];
     for (i, out) in result.iter_mut().enumerate() {
-        let row_start = i * dimension;
-        let mut sum = 0.0;
-        for j in 0..dimension {
-            sum += rotation[row_start + j] * vector[j];
+        let row = &rotation[i * dimension..(i + 1) * dimension];
+        #[cfg(feature = "simd")]
+        {
+            *out = innr::dot(row, vector);
         }
-        *out = sum;
+        #[cfg(not(feature = "simd"))]
+        {
+            let mut sum = 0.0f32;
+            for j in 0..dimension {
+                sum += row[j] * vector[j];
+            }
+            *out = sum;
+        }
     }
     result
 }
