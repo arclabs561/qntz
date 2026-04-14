@@ -27,6 +27,7 @@ binary = []
 
 [dev-dependencies]
 ans = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.9"
 
 [profile.release]
@@ -36,6 +37,11 @@ codegen-units = 1
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+[[bench]]
+name = "quantization"
+path = "benches/quantization.rs"
+harness = false
 
 [[example]]
 name = "entropy_coded_quantization"
