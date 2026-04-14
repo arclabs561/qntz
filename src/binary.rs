@@ -180,13 +180,60 @@ impl BinaryQuantizer {
         let rotated = apply_rotation_rect(&self.rotation, query, self.dim, self.projected_dim);
 
         // Inner product against +/-1 codes.
+        // Process 8 elements per byte to avoid per-element div/mod.
         let mut ip = 0.0f32;
-        for (i, &rq) in rotated.iter().enumerate() {
+        let full_bytes = rotated.len() / 8;
+        for byte_idx in 0..full_bytes {
+            let byte = code[byte_idx];
+            let base = byte_idx * 8;
+            // Unroll 8 bits per byte: sign = +1 if bit set, -1 otherwise
+            ip += if byte & 1 != 0 {
+                rotated[base]
+            } else {
+                -rotated[base]
+            };
+            ip += if byte & 2 != 0 {
+                rotated[base + 1]
+            } else {
+                -rotated[base + 1]
+            };
+            ip += if byte & 4 != 0 {
+                rotated[base + 2]
+            } else {
+                -rotated[base + 2]
+            };
+            ip += if byte & 8 != 0 {
+                rotated[base + 3]
+            } else {
+                -rotated[base + 3]
+            };
+            ip += if byte & 16 != 0 {
+                rotated[base + 4]
+            } else {
+                -rotated[base + 4]
+            };
+            ip += if byte & 32 != 0 {
+                rotated[base + 5]
+            } else {
+                -rotated[base + 5]
+            };
+            ip += if byte & 64 != 0 {
+                rotated[base + 6]
+            } else {
+                -rotated[base + 6]
+            };
+            ip += if byte & 128 != 0 {
+                rotated[base + 7]
+            } else {
+                -rotated[base + 7]
+            };
+        }
+        // Tail elements
+        for i in (full_bytes * 8)..rotated.len() {
             let byte_idx = i / 8;
             let bit_idx = i % 8;
             let bit = (code[byte_idx] >> bit_idx) & 1;
-            let sign = if bit == 1 { 1.0f32 } else { -1.0f32 };
-            ip += rq * sign;
+            ip += if bit == 1 { rotated[i] } else { -rotated[i] };
         }
 
         // Negate so that similar vectors have smaller distance.
@@ -210,59 +257,7 @@ impl BinaryQuantizer {
 /// Generate a `projected_dim × dim` row-major orthonormal matrix via
 /// Gram-Schmidt on Gaussian random vectors.
 fn generate_rotation(dim: usize, projected_dim: usize, seed: u64) -> Vec<f32> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut state = seed;
-    let mut next_gaussian = || -> f32 {
-        // Box-Muller using the same LCG-style hash chain as rabitq.rs
-        let mut hasher = DefaultHasher::new();
-        state.hash(&mut hasher);
-        state = hasher.finish();
-        let u1 = (state as f64) / (u64::MAX as f64);
-        let mut hasher2 = DefaultHasher::new();
-        state.hash(&mut hasher2);
-        state = hasher2.finish();
-        let u2 = (state as f64) / (u64::MAX as f64);
-        ((-2.0 * u1.max(f64::EPSILON).ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32
-    };
-
-    let mut basis: Vec<Vec<f32>> = Vec::with_capacity(projected_dim);
-
-    for i in 0..projected_dim {
-        let mut v: Vec<f32> = (0..dim).map(|_| next_gaussian()).collect();
-
-        // Gram-Schmidt orthogonalization against all previous basis vectors.
-        for b in &basis {
-            let dot: f32 = v.iter().zip(b.iter()).map(|(a, b)| a * b).sum();
-            for (vi, bi) in v.iter_mut().zip(b.iter()) {
-                *vi -= dot * bi;
-            }
-        }
-
-        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 1e-10 {
-            for vi in &mut v {
-                *vi /= norm;
-            }
-            basis.push(v);
-        } else {
-            // Degenerate: fall back to standard basis vector.
-            let mut e = vec![0.0f32; dim];
-            // Pick an index not already used.
-            let fallback_idx = i % dim;
-            e[fallback_idx] = 1.0;
-            basis.push(e);
-        }
-    }
-
-    // Flatten into row-major matrix.
-    let mut rotation = vec![0.0f32; projected_dim * dim];
-    for (row_idx, row) in basis.iter().enumerate() {
-        let offset = row_idx * dim;
-        rotation[offset..offset + dim].copy_from_slice(row);
-    }
-    rotation
+    crate::rotation::orthogonal_rotation_matrix(dim, projected_dim, seed)
 }
 
 /// Matrix-vector product: `projected_dim × dim` matrix times `dim`-vector.
@@ -274,10 +269,22 @@ fn apply_rotation_rect(
 ) -> Vec<f32> {
     let mut result = vec![0.0f32; projected_dim];
     for (i, out) in result.iter_mut().enumerate() {
-        let row_start = i * dim;
-        let mut sum = 0.0f32;
-        for j in 0..dim {
-            sum += rotation[row_start + j] * vector[j];
+        let row = &rotation[i * dim..(i + 1) * dim];
+        let chunks = dim / 4;
+        let mut s0 = 0.0f32;
+        let mut s1 = 0.0f32;
+        let mut s2 = 0.0f32;
+        let mut s3 = 0.0f32;
+        for c in 0..chunks {
+            let b = c * 4;
+            s0 += row[b] * vector[b];
+            s1 += row[b + 1] * vector[b + 1];
+            s2 += row[b + 2] * vector[b + 2];
+            s3 += row[b + 3] * vector[b + 3];
+        }
+        let mut sum = (s0 + s1) + (s2 + s3);
+        for j in (chunks * 4)..dim {
+            sum += row[j] * vector[j];
         }
         *out = sum;
     }

@@ -96,7 +96,10 @@ fn test_distance_correlation(total_bits: usize, dim: usize, expected_min_corr: f
     quantizer.fit(&flat, n_data).unwrap();
 
     // Quantize all data vectors
-    let quantized: Vec<_> = data.iter().map(|v| quantizer.quantize(v).unwrap()).collect();
+    let quantized: Vec<_> = data
+        .iter()
+        .map(|v| quantizer.quantize(v).unwrap())
+        .collect();
 
     // For each query, compute exact and approximate distances to all data vectors
     let mut correlations = Vec::new();

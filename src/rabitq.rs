@@ -336,7 +336,11 @@ impl RaBitQQuantizer {
         let vl = delta * cb;
 
         // pack
-        let binary_codes = pack_binary_codes(&binary_codes_unpacked);
+        let bytes_needed = binary_codes_unpacked.len().div_ceil(8);
+        let mut binary_codes = vec![0u8; bytes_needed];
+        crate::simd_ops::pack_binary_fast(&binary_codes_unpacked, &mut binary_codes)
+            .expect("buffer sized correctly");
+
         let extended_codes = pack_extended_codes(&extended_codes_unpacked, ex_bits);
 
         Ok(QuantizedVector {
@@ -687,17 +691,6 @@ fn compute_const_scaling_factor(dim: usize, ex_bits: usize, seed: u64) -> f32 {
 // Bit Packing Utilities
 // ============================================================================
 
-fn pack_binary_codes(codes: &[u8]) -> Vec<u8> {
-    let bytes_needed = codes.len().div_ceil(8);
-    let mut packed = vec![0u8; bytes_needed];
-    for (i, &code) in codes.iter().enumerate() {
-        if code != 0 {
-            packed[i / 8] |= 1 << (i % 8);
-        }
-    }
-    packed
-}
-
 fn pack_extended_codes(codes: &[u16], ex_bits: usize) -> Vec<u8> {
     if ex_bits == 0 {
         return Vec::new();
@@ -730,53 +723,7 @@ fn pack_extended_codes(codes: &[u16], ex_bits: usize) -> Vec<u8> {
 // ============================================================================
 
 fn generate_orthogonal_rotation(dimension: usize, seed: u64) -> Vec<f32> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut rotation = vec![0.0f32; dimension * dimension];
-
-    let mut state = seed;
-    let mut next_rand = || -> f32 {
-        let mut hasher = DefaultHasher::new();
-        state.hash(&mut hasher);
-        state = hasher.finish();
-        ((state as f64) / (u64::MAX as f64) * 2.0 - 1.0) as f32
-    };
-
-    let mut basis: Vec<Vec<f32>> = Vec::new();
-
-    for i in 0..dimension {
-        let mut v: Vec<f32> = (0..dimension).map(|_| next_rand()).collect();
-
-        // orthogonalize
-        for b in &basis {
-            let dot: f32 = v.iter().zip(b.iter()).map(|(a, b)| a * b).sum();
-            for (vi, bi) in v.iter_mut().zip(b.iter()) {
-                *vi -= dot * bi;
-            }
-        }
-
-        // normalize
-        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 1e-10 {
-            for vi in &mut v {
-                *vi /= norm;
-            }
-            basis.push(v);
-        } else {
-            let mut v = vec![0.0f32; dimension];
-            v[i] = 1.0;
-            basis.push(v);
-        }
-    }
-
-    for (i, row) in basis.iter().enumerate() {
-        for (j, &val) in row.iter().enumerate() {
-            rotation[i * dimension + j] = val;
-        }
-    }
-
-    rotation
+    crate::rotation::orthogonal_rotation_matrix(dimension, dimension, seed)
 }
 
 fn apply_rotation(vector: &[f32], rotation: &[f32], dimension: usize) -> Vec<f32> {

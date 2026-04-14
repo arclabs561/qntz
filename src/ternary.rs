@@ -335,10 +335,28 @@ pub fn asymmetric_inner_product(query: &[f32], quantized: &TernaryVector) -> f32
         return 0.0;
     }
 
+    // Process 4 elements per byte (2 bits each) to avoid per-element div/mod.
     let mut sum = 0.0f32;
-    for (i, &q) in query.iter().enumerate() {
+    let full_bytes = quantized.dimension / 4;
+    for byte_idx in 0..full_bytes {
+        let byte = quantized.data[byte_idx];
+        let base = byte_idx * 4;
+        // Unpack 4 ternary values from one byte
+        for j in 0..4 {
+            let bits = (byte >> (j * 2)) & 0b11;
+            let val = match bits {
+                0b01 => 1.0f32,
+                0b10 => -1.0,
+                _ => 0.0,
+            };
+            sum += query[base + j] * val;
+        }
+    }
+    // Tail elements
+    let tail_start = full_bytes * 4;
+    for i in tail_start..quantized.dimension {
         let val = quantized.get(i);
-        sum += q * (val as f32);
+        sum += query[i] * (val as f32);
     }
     sum
 }
@@ -371,11 +389,18 @@ pub fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> Option<usize> {
         return None;
     }
 
-    let mut diff = 0;
-    for i in 0..a.dimension {
-        if a.get(i) != b.get(i) {
-            diff += 1;
-        }
+    // Process byte-at-a-time: XOR packed bytes, then count differing 2-bit slots.
+    // Each byte holds 4 ternary values (2 bits each). XOR gives non-zero bits
+    // where values differ; we count non-zero 2-bit pairs.
+    let mut diff = 0usize;
+    for (&ba, &bb) in a.data.iter().zip(b.data.iter()) {
+        let xor = ba ^ bb;
+        // Count non-zero 2-bit pairs: a pair is nonzero if either bit is set.
+        // Merge each pair's two bits with OR: (hi | lo) per pair.
+        let lo = xor & 0b01_01_01_01;
+        let hi = (xor >> 1) & 0b01_01_01_01;
+        let nonzero = lo | hi; // one bit per pair: 1 if pair differs
+        diff += nonzero.count_ones() as usize;
     }
     Some(diff)
 }

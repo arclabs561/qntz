@@ -81,3 +81,5 @@ pub mod binary;
 
 /// Bit packing + popcount-based operations for low-bit codes.
 pub mod simd_ops;
+
+pub(crate) mod rotation;
