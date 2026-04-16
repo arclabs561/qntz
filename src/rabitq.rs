@@ -543,11 +543,22 @@ impl RaBitQQuantizer {
         quantized: &QuantizedVector,
     ) -> f32 {
         let cb = -((1 << quantized.ex_bits) as f32 - 0.5);
-        let mut ip = 0.0f32;
-        for (i, &q) in rotated_query.iter().enumerate() {
-            let code_val = quantized.codes[i] as f32 + cb;
-            ip += q * code_val;
+        // Two-accumulator reduction: breaks the serial FP dependency chain so
+        // that LLVM can issue two fmadd streams in parallel (latency hiding).
+        let mut ip0 = 0.0f32;
+        let mut ip1 = 0.0f32;
+        let codes = &quantized.codes;
+        let chunks = rotated_query.len() / 2;
+        for i in 0..chunks {
+            let j = i * 2;
+            ip0 += rotated_query[j] * (codes[j] as f32 + cb);
+            ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
         }
+        if rotated_query.len() % 2 != 0 {
+            let last = rotated_query.len() - 1;
+            ip0 += rotated_query[last] * (codes[last] as f32 + cb);
+        }
+        let ip = ip0 + ip1;
         (quantized.f_add + quantized.f_rescale * ip).max(0.0)
     }
 
@@ -791,19 +802,68 @@ fn pack_extended_codes(codes: &[u16], ex_bits: usize) -> Vec<u8> {
     let bytes_needed = total_bits.div_ceil(8);
     let mut packed = vec![0u8; bytes_needed];
 
-    let mut bit_pos = 0;
+    // Fast path for bit widths that divide evenly into 8 (1, 2, 4) or equal 8.
+    // Pack multiple codes per byte without the inner bit loop.
+    match ex_bits {
+        1 => {
+            // 8 codes per byte
+            for (chunk_idx, chunk) in codes.chunks(8).enumerate() {
+                let mut byte = 0u8;
+                for (b, &code) in chunk.iter().enumerate() {
+                    byte |= ((code & 1) as u8) << b;
+                }
+                packed[chunk_idx] = byte;
+            }
+            return packed;
+        }
+        2 => {
+            // 4 codes per byte
+            for (chunk_idx, chunk) in codes.chunks(4).enumerate() {
+                let mut byte = 0u8;
+                for (b, &code) in chunk.iter().enumerate() {
+                    byte |= ((code & 3) as u8) << (b * 2);
+                }
+                packed[chunk_idx] = byte;
+            }
+            return packed;
+        }
+        4 => {
+            // 2 codes per byte
+            for (chunk_idx, chunk) in codes.chunks(2).enumerate() {
+                let lo = (chunk[0] & 0xF) as u8;
+                let hi = if chunk.len() > 1 { (chunk[1] & 0xF) as u8 } else { 0 };
+                packed[chunk_idx] = lo | (hi << 4);
+            }
+            return packed;
+        }
+        8 => {
+            // 1 code per byte
+            for (i, &code) in codes.iter().enumerate() {
+                packed[i] = (code & 0xFF) as u8;
+            }
+            return packed;
+        }
+        _ => {}
+    }
+
+    // General path for ex_bits ∈ {3, 5, 6, 7}: bit-by-bit packing.
+    let mut bit_pos = 0usize;
     for &code in codes {
         let val = code & ((1 << ex_bits) - 1);
-        for b in 0..ex_bits {
-            if (val >> b) & 1 != 0 {
-                let byte_idx = bit_pos / 8;
-                let bit_idx = bit_pos % 8;
-                if byte_idx < packed.len() {
-                    packed[byte_idx] |= 1 << bit_idx;
-                }
-            }
-            bit_pos += 1;
+        // Pack ex_bits bits from val starting at bit_pos.
+        // Most codes cross at most 2 bytes; handle byte-aligned case separately.
+        let byte_idx = bit_pos / 8;
+        let bit_off = bit_pos % 8;
+        let bits_in_first = 8 - bit_off;
+        if ex_bits <= bits_in_first {
+            // All bits fit in the current byte.
+            packed[byte_idx] |= (val as u8) << bit_off;
+        } else {
+            // Spans two bytes.
+            packed[byte_idx] |= (val as u8) << bit_off;
+            packed[byte_idx + 1] |= (val >> bits_in_first) as u8;
         }
+        bit_pos += ex_bits;
     }
 
     packed

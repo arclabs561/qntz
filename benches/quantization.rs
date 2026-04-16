@@ -99,22 +99,58 @@ fn bench_rabitq(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("rabitq");
     for &dim in &[128usize, 768] {
-        let q = RaBitQQuantizer::with_config(dim, 42, RaBitQConfig::binary()).unwrap();
+        // --- 1-bit (binary) ---
+        let q1 = RaBitQQuantizer::with_config(dim, 42, RaBitQConfig::binary()).unwrap();
         let doc = make_f32_vec(dim, 1);
         let query = make_f32_vec(dim, 2);
-        let qv = q.quantize(&doc).unwrap();
+        let qv1 = q1.quantize(&doc).unwrap();
+        let rotated_query1 = q1.rotate_query(&query).unwrap();
 
         group.throughput(Throughput::Elements(dim as u64));
         group.bench_with_input(BenchmarkId::new("quantize_1bit", dim), &dim, |b, _| {
-            b.iter(|| q.quantize(black_box(&doc)).unwrap());
+            b.iter(|| q1.quantize(black_box(&doc)).unwrap());
         });
         group.bench_with_input(
             BenchmarkId::new("approximate_l2_sqr_1bit", dim),
             &dim,
             |b, _| {
                 b.iter(|| {
-                    q.approximate_l2_sqr(black_box(&query), black_box(&qv))
+                    q1.approximate_l2_sqr(black_box(&query), black_box(&qv1))
                         .unwrap()
+                });
+            },
+        );
+        // Pre-rotated distance -- the hot path when rotation is amortized.
+        group.bench_with_input(
+            BenchmarkId::new("l2_sqr_prerotated_1bit", dim),
+            &dim,
+            |b, _| {
+                b.iter(|| {
+                    RaBitQQuantizer::approximate_l2_sqr_prerotated(
+                        black_box(&rotated_query1),
+                        black_box(&qv1),
+                    )
+                });
+            },
+        );
+
+        // --- 4-bit ---
+        let q4 = RaBitQQuantizer::with_config(dim, 42, RaBitQConfig::bits4()).unwrap();
+        let qv4 = q4.quantize(&doc).unwrap();
+        let rotated_query4 = q4.rotate_query(&query).unwrap();
+
+        group.bench_with_input(BenchmarkId::new("quantize_4bit", dim), &dim, |b, _| {
+            b.iter(|| q4.quantize(black_box(&doc)).unwrap());
+        });
+        group.bench_with_input(
+            BenchmarkId::new("l2_sqr_prerotated_4bit", dim),
+            &dim,
+            |b, _| {
+                b.iter(|| {
+                    RaBitQQuantizer::approximate_l2_sqr_prerotated(
+                        black_box(&rotated_query4),
+                        black_box(&qv4),
+                    )
                 });
             },
         );
