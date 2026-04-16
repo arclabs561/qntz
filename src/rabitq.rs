@@ -358,6 +358,97 @@ impl RaBitQQuantizer {
         })
     }
 
+    /// Quantize a pre-rotated residual vector.
+    ///
+    /// Skips the O(d^2) rotation step. The caller provides `R*(v - centroid)`
+    /// directly. The raw `centroid` is still needed for correction factors.
+    ///
+    /// Use when `R*v` and `R*centroid` are precomputed (e.g., vertex-relative
+    /// quantization where `R*v - R*u` is O(d) subtraction).
+    pub fn quantize_prerotated(
+        &self,
+        rotated_residual: &[f32],
+        raw_centroid: &[f32],
+    ) -> crate::Result<QuantizedVector> {
+        let dim = self.dimension;
+        if rotated_residual.len() != dim || raw_centroid.len() != dim {
+            return Err(VQuantError::DimensionMismatch {
+                expected: dim,
+                got: rotated_residual.len(),
+            });
+        }
+        let ex_bits = self.config.total_bits.saturating_sub(1);
+        let rotated = rotated_residual;
+
+        // Step 3: sign bits
+        let mut binary_codes_unpacked = vec![0u8; dim];
+        for (i, &val) in rotated.iter().enumerate() {
+            if val >= 0.0 {
+                binary_codes_unpacked[i] = 1;
+            }
+        }
+
+        // Step 4: extended codes
+        let extended_codes_unpacked = if ex_bits > 0 {
+            self.compute_extended_codes(rotated, ex_bits).0
+        } else {
+            vec![0u16; dim]
+        };
+
+        // Step 5: total codes
+        let mut total_codes = vec![0u16; dim];
+        for i in 0..dim {
+            total_codes[i] =
+                extended_codes_unpacked[i] + ((binary_codes_unpacked[i] as u16) << ex_bits);
+        }
+
+        // Step 6: correction factors
+        let cb = -((1 << ex_bits) as f32 - 0.5);
+        let xu_multibit: Vec<f32> = total_codes.iter().map(|&c| c as f32 + cb).collect();
+        let (f_add, f_rescale, f_error, residual_norm) =
+            self.compute_correction_factors(rotated, raw_centroid, &xu_multibit);
+
+        // Step 7: delta/vl
+        let norm_quan_sqr: f32 = xu_multibit.iter().map(|x| x * x).sum();
+        let norm_residual_sqr: f32 = rotated.iter().map(|x| x * x).sum();
+        let dot_rq: f32 = rotated
+            .iter()
+            .zip(xu_multibit.iter())
+            .map(|(r, q)| r * q)
+            .sum();
+        let norm_residual = norm_residual_sqr.sqrt();
+        let norm_quant = norm_quan_sqr.sqrt();
+        let denom = (norm_residual * norm_quant).max(f32::EPSILON);
+        let cos_sim = (dot_rq / denom).clamp(-1.0, 1.0);
+        let delta = if norm_quant <= f32::EPSILON {
+            0.0
+        } else {
+            (norm_residual / norm_quant) * cos_sim
+        };
+        let vl = delta * cb;
+
+        // pack
+        let bytes_needed = binary_codes_unpacked.len().div_ceil(8);
+        let mut binary_codes = vec![0u8; bytes_needed];
+        crate::simd_ops::pack_binary_fast(&binary_codes_unpacked, &mut binary_codes)
+            .expect("buffer sized correctly");
+        let extended_codes = pack_extended_codes(&extended_codes_unpacked, ex_bits);
+
+        Ok(QuantizedVector {
+            binary_codes,
+            extended_codes,
+            codes: total_codes,
+            ex_bits: ex_bits as u8,
+            dimension: dim,
+            delta,
+            vl,
+            f_add,
+            f_rescale,
+            f_error,
+            residual_norm,
+        })
+    }
+
     /// Compute extended codes using optimal rescaling.
     fn compute_extended_codes(&self, rotated: &[f32], ex_bits: usize) -> (Vec<u16>, f32) {
         let dim = self.dimension;
