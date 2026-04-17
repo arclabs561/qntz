@@ -361,7 +361,35 @@ impl RaBitQQuantizer {
     /// Quantize a pre-rotated residual vector.
     ///
     /// Skips the O(d^2) rotation step. The caller provides `R*(v - centroid)`
-    /// directly. The raw `centroid` is still needed for correction factors.
+    /// directly.
+    ///
+    /// # The `raw_centroid` parameter
+    ///
+    /// `raw_centroid` is only used to derive the `f_add` correction factor
+    /// (via `ip_cent_xucb = <raw_centroid, xu_cb>`). Two correct usage patterns:
+    ///
+    /// - **Matches [`quantize_with_centroid`](Self::quantize_with_centroid)**:
+    ///   pass the real centroid (e.g., the one you set with
+    ///   [`set_centroid`](Self::set_centroid) or fit with
+    ///   [`fit`](Self::fit)). The resulting `QuantizedVector` produces the
+    ///   same ranking score as [`approximate_l2_sqr`](Self::approximate_l2_sqr):
+    ///   under the rank-1 approximation this is
+    ///   `||q - v||^2 - ||q - c||^2` (a per-query-constant-shifted distance).
+    ///
+    /// - **Zero centroid for decomposable edge distances** (vertex-relative
+    ///   graph quantization, SymphonyQG-VR style): pass `&vec![0.0; dim]`.
+    ///   `f_add` stays at `||v - c||^2` without the
+    ///   `-f_rescale * <c, xu_cb>` extra term. The returned `QuantizedVector`
+    ///   plugged into [`approximate_l2_sqr_prerotated`] gives
+    ///   `||v - c||^2 + f_rescale * <R*(q - c), xu_cb>`, which approximates
+    ///   `||v - c||^2 - 2 * <q - c, v - c>`. Add the caller's external
+    ///   `||q - c||^2` (e.g., `||q - parent||^2` in VR) to recover a true
+    ///   absolute distance that is comparable across different parents.
+    ///
+    /// Mixing these two patterns across a single index is usually a bug: the
+    /// real-centroid form is only consistent for within-query ranking, and
+    /// the zero-centroid form is only consistent when the caller adds the
+    /// external constant.
     ///
     /// Use when `R*v` and `R*centroid` are precomputed (e.g., vertex-relative
     /// quantization where `R*v - R*u` is O(d) subtraction).
@@ -534,6 +562,35 @@ impl RaBitQQuantizer {
     }
 
     /// Approximate L2 distance squared using a pre-rotated query.
+    ///
+    /// # Semantics
+    ///
+    /// This returns a **ranking score**, not an absolute distance. Under the
+    /// rank-1 RaBitQ approximation, the returned value approximates
+    /// `||q - v||^2 - ||q - c||^2`, where `c` is the centroid that was set on
+    /// the quantizer at fit time. The missing `||q - c||^2` is a per-query
+    /// constant, so ranking between candidates for a single query is preserved.
+    ///
+    /// # When this is fine
+    ///
+    /// Graph beam search, IVF probing, or any pipeline that only compares
+    /// scores against other candidates of the same query. The constant shift
+    /// cancels.
+    ///
+    /// # When to use a different API
+    ///
+    /// If you need to compose the quantized term with an externally-computed
+    /// distance (e.g., vertex-relative graph quantization, where each edge is
+    /// quantized against its parent `u` and the caller then adds `||q - u||^2`
+    /// to make a proper absolute distance across parents), use
+    /// [`quantize_prerotated`](Self::quantize_prerotated) with a **zero**
+    /// `raw_centroid`. That keeps `f_add = ||v - c||^2` pure and yields the
+    /// decomposable form `||v - c||^2 + f_rescale * <R*(q - c), xu_cb>` whose
+    /// sum with your external `||q - u||^2` is a consistent absolute distance.
+    /// Passing the real (non-zero) centroid bakes in an extra
+    /// `-f_rescale * <c, xu_cb>` term that is benign for single-query ranking
+    /// but becomes a per-edge systematic bias once you compose with external
+    /// distances.
     ///
     /// Use with [`rotate_query`](Self::rotate_query) to amortize the O(d^2)
     /// rotation cost across multiple distance computations.
@@ -831,7 +888,11 @@ fn pack_extended_codes(codes: &[u16], ex_bits: usize) -> Vec<u8> {
             // 2 codes per byte
             for (chunk_idx, chunk) in codes.chunks(2).enumerate() {
                 let lo = (chunk[0] & 0xF) as u8;
-                let hi = if chunk.len() > 1 { (chunk[1] & 0xF) as u8 } else { 0 };
+                let hi = if chunk.len() > 1 {
+                    (chunk[1] & 0xF) as u8
+                } else {
+                    0
+                };
                 packed[chunk_idx] = lo | (hi << 4);
             }
             return packed;
