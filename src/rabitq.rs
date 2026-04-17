@@ -358,41 +358,34 @@ impl RaBitQQuantizer {
         })
     }
 
-    /// Quantize a pre-rotated residual vector.
+    /// Quantizes a pre-rotated residual `R · (v − c)` without repeating the
+    /// O(d²) rotation.
     ///
-    /// Skips the O(d^2) rotation step. The caller provides `R*(v - centroid)`
-    /// directly.
+    /// Use this when the caller has already rotated `v − c` (or a batch of
+    /// such residuals) and wants to reuse that work.
+    /// [`quantize_with_centroid`](Self::quantize_with_centroid) is the direct
+    /// equivalent when the residual has not yet been rotated.
     ///
-    /// # The `raw_centroid` parameter
+    /// The resulting [`QuantizedVector`] is a ranking-score code: pair it
+    /// with [`approximate_l2_sqr_prerotated`](Self::approximate_l2_sqr_prerotated),
+    /// which returns `||q − v||^2 − ||q − c||^2`. For an absolute distance
+    /// that is comparable across different centroids (graph edges), use
+    /// [`quantize_edge_prerotated`](Self::quantize_edge_prerotated) instead,
+    /// which returns a distinct [`EdgeQuantizedVector`] and pairs with
+    /// [`edge_distance_term_prerotated`](Self::edge_distance_term_prerotated).
     ///
-    /// `raw_centroid` is only used to derive the `f_add` correction factor
-    /// (via `ip_cent_xucb = <raw_centroid, xu_cb>`). Two correct usage patterns:
+    /// # Arguments
     ///
-    /// - **Matches [`quantize_with_centroid`](Self::quantize_with_centroid)**:
-    ///   pass the real centroid (e.g., the one you set with
-    ///   [`set_centroid`](Self::set_centroid) or fit with
-    ///   [`fit`](Self::fit)). The resulting `QuantizedVector` produces the
-    ///   same ranking score as [`approximate_l2_sqr`](Self::approximate_l2_sqr):
-    ///   under the rank-1 approximation this is
-    ///   `||q - v||^2 - ||q - c||^2` (a per-query-constant-shifted distance).
+    /// * `rotated_residual` — `R · (v − c)`, with length equal to the
+    ///   quantizer's dimension.
+    /// * `raw_centroid` — the same `c` used to form `rotated_residual`. Pass
+    ///   a zero vector if `rotated_residual` is simply `R · v`. Passing a
+    ///   mismatching centroid produces a value that is not a valid distance.
     ///
-    /// - **Zero centroid for decomposable edge distances** (vertex-relative
-    ///   graph quantization, SymphonyQG-VR style): pass `&vec![0.0; dim]`.
-    ///   `f_add` stays at `||v - c||^2` without the
-    ///   `-f_rescale * <c, xu_cb>` extra term. The returned `QuantizedVector`
-    ///   plugged into [`approximate_l2_sqr_prerotated`] gives
-    ///   `||v - c||^2 + f_rescale * <R*(q - c), xu_cb>`, which approximates
-    ///   `||v - c||^2 - 2 * <q - c, v - c>`. Add the caller's external
-    ///   `||q - c||^2` (e.g., `||q - parent||^2` in VR) to recover a true
-    ///   absolute distance that is comparable across different parents.
+    /// # Errors
     ///
-    /// Mixing these two patterns across a single index is usually a bug: the
-    /// real-centroid form is only consistent for within-query ranking, and
-    /// the zero-centroid form is only consistent when the caller adds the
-    /// external constant.
-    ///
-    /// Use when `R*v` and `R*centroid` are precomputed (e.g., vertex-relative
-    /// quantization where `R*v - R*u` is O(d) subtraction).
+    /// Returns [`VQuantError::DimensionMismatch`] if either slice length
+    /// differs from the quantizer's dimension.
     pub fn quantize_prerotated(
         &self,
         rotated_residual: &[f32],
@@ -539,7 +532,7 @@ impl RaBitQQuantizer {
         (f_add, f_rescale, f_error, l2_norm)
     }
 
-    /// Pre-rotate a query vector for use with [`approximate_l2_sqr_prerotated`].
+    /// Pre-rotate a query vector for use with [`approximate_l2_sqr_prerotated`](Self::approximate_l2_sqr_prerotated).
     ///
     /// Subtracts the centroid (if set) and applies the rotation matrix.
     /// Call this once per query, then use the result for multiple distance
@@ -561,39 +554,27 @@ impl RaBitQQuantizer {
         Ok(apply_rotation(&residual, &self.rotation, self.dimension))
     }
 
-    /// Approximate L2 distance squared using a pre-rotated query.
+    /// Ranking score between a pre-rotated query and a quantized vector.
     ///
-    /// # Semantics
+    /// Under the rank-1 RaBitQ approximation this returns
+    /// `||q − v||^2 − ||q − c||^2`, i.e. the true squared L2 distance minus
+    /// a per-query constant. The constant cancels across candidates, so the
+    /// score is suitable for any within-query top-k ranking — graph beam
+    /// search, IVF probing, reranking pools — but it is not a distance.
+    /// Scores from quantizers with different centroids are not comparable.
     ///
-    /// This returns a **ranking score**, not an absolute distance. Under the
-    /// rank-1 RaBitQ approximation, the returned value approximates
-    /// `||q - v||^2 - ||q - c||^2`, where `c` is the centroid that was set on
-    /// the quantizer at fit time. The missing `||q - c||^2` is a per-query
-    /// constant, so ranking between candidates for a single query is preserved.
+    /// `rotated_query` must be `R · (q − c)`, the output of
+    /// [`rotate_query`](Self::rotate_query). That method uses the quantizer's
+    /// own centroid (from [`fit`](Self::fit) or
+    /// [`set_centroid`](Self::set_centroid)), so the call amortises the
+    /// O(d²) rotation across a batch of distance computations.
     ///
-    /// # When this is fine
-    ///
-    /// Graph beam search, IVF probing, or any pipeline that only compares
-    /// scores against other candidates of the same query. The constant shift
-    /// cancels.
-    ///
-    /// # When to use a different API
-    ///
-    /// If you need to compose the quantized term with an externally-computed
-    /// distance (e.g., vertex-relative graph quantization, where each edge is
-    /// quantized against its parent `u` and the caller then adds `||q - u||^2`
-    /// to make a proper absolute distance across parents), use
-    /// [`quantize_prerotated`](Self::quantize_prerotated) with a **zero**
-    /// `raw_centroid`. That keeps `f_add = ||v - c||^2` pure and yields the
-    /// decomposable form `||v - c||^2 + f_rescale * <R*(q - c), xu_cb>` whose
-    /// sum with your external `||q - u||^2` is a consistent absolute distance.
-    /// Passing the real (non-zero) centroid bakes in an extra
-    /// `-f_rescale * <c, xu_cb>` term that is benign for single-query ranking
-    /// but becomes a per-edge systematic bias once you compose with external
-    /// distances.
-    ///
-    /// Use with [`rotate_query`](Self::rotate_query) to amortize the O(d^2)
-    /// rotation cost across multiple distance computations.
+    /// For an absolute `||q − v||^2` composable across graph edges — where
+    /// each edge has its own parent — use
+    /// [`quantize_edge_prerotated`](Self::quantize_edge_prerotated) with
+    /// [`edge_distance_term_prerotated`](Self::edge_distance_term_prerotated).
+    /// The distinct [`EdgeQuantizedVector`] type means the compiler will
+    /// refuse to let you pass an edge through this method by mistake.
     #[inline]
     pub fn approximate_l2_sqr_prerotated(
         rotated_query: &[f32],
@@ -663,6 +644,172 @@ impl RaBitQQuantizer {
     ) -> crate::Result<f32> {
         Ok(self.approximate_l2_sqr(query, quantized)?.sqrt())
     }
+
+    // ─── Edge quantization (vertex-relative graph distances) ────────────────
+
+    /// Quantizes an edge residual `v − u` for vertex-relative graph search.
+    ///
+    /// Each edge `u → v` in a vertex-relative graph (such as SymphonyQG-VR)
+    /// stores a RaBitQ code for `v − u`. Unlike a ranking-score code, the
+    /// returned [`EdgeQuantizedVector`] carries enough information to form
+    /// an absolute `||q − v||^2` at search time when the caller supplies
+    /// `||q − u||^2`. The decomposition is:
+    ///
+    /// ```text
+    /// ||q − v||^2  ≈  ||q − u||^2   +   [ ||v − u||^2 + f_rescale · ⟨R(q − u), xu_cb⟩ ]
+    ///                 └─ caller ─┘       └────── edge_distance_term_prerotated ──────┘
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `rotated_parent` — `R · u`. Compute once per parent; reuse across
+    ///   all outgoing edges and for every later query.
+    /// * `rotated_residual` — `R · (v − u)`. In practice compute this as
+    ///   `R·v − R·u`, an O(d) subtraction of pre-rotated vectors, rather
+    ///   than rotating the residual (O(d²)).
+    ///
+    /// Both slices must have length equal to the quantizer's dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VQuantError::DimensionMismatch`] if either slice length
+    /// is wrong.
+    ///
+    /// # Why a distinct type
+    ///
+    /// Plugging an edge code into
+    /// [`approximate_l2_sqr_prerotated`](Self::approximate_l2_sqr_prerotated)
+    /// would produce a per-edge systematic bias, because that method returns
+    /// a ranking-score shift that is only valid within a single centroid.
+    /// Returning [`EdgeQuantizedVector`] instead of [`QuantizedVector`] makes
+    /// the mistake a type error; use
+    /// [`edge_distance_term_prerotated`](Self::edge_distance_term_prerotated)
+    /// and add `||q − u||^2` externally.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use qntz::rabitq::{RaBitQConfig, RaBitQQuantizer};
+    ///
+    /// let dim = 64;
+    /// let mut q = RaBitQQuantizer::with_config(dim, 0, RaBitQConfig::bits4())?;
+    /// // Edge codes use no global centroid — every parent plays that role.
+    /// q.set_centroid(vec![0.0; dim])?;
+    ///
+    /// let u: Vec<f32> = (0..dim).map(|i| (i as f32).sin()).collect();
+    /// let v: Vec<f32> = (0..dim).map(|i| (i as f32).cos()).collect();
+    /// let query: Vec<f32> = (0..dim).map(|i| (i as f32) * 0.01).collect();
+    ///
+    /// // Rotate u, v, and q once; reuse the rotations for each edge.
+    /// let ru = q.rotate_query(&u)?;
+    /// let rv = q.rotate_query(&v)?;
+    /// let rq = q.rotate_query(&query)?;
+    /// let residual: Vec<f32> = rv.iter().zip(&ru).map(|(a, b)| a - b).collect();
+    ///
+    /// let edge = q.quantize_edge_prerotated(&ru, &residual)?;
+    /// let term = RaBitQQuantizer::edge_distance_term_prerotated(&rq, &edge);
+    ///
+    /// // Caller supplies ||q - u||^2 to complete the distance.
+    /// let qu_sqr: f32 = query.iter().zip(&u).map(|(a, b)| (a - b).powi(2)).sum();
+    /// let approx_qv_sqr = qu_sqr + term;
+    /// assert!(approx_qv_sqr >= 0.0);
+    /// # Ok::<(), qntz::VQuantError>(())
+    /// ```
+    pub fn quantize_edge_prerotated(
+        &self,
+        rotated_parent: &[f32],
+        rotated_residual: &[f32],
+    ) -> crate::Result<EdgeQuantizedVector> {
+        if rotated_parent.len() != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: rotated_parent.len(),
+            });
+        }
+        let zero = vec![0.0f32; self.dimension];
+        let quantized = self.quantize_prerotated(rotated_residual, &zero)?;
+        // Precompute <R*parent, xu_cb> where xu_cb = codes + cb.
+        let cb = -((1u32 << quantized.ex_bits) as f32 - 0.5);
+        let mut ip_parent = 0.0f32;
+        for (i, &p) in rotated_parent.iter().enumerate() {
+            ip_parent += p * (quantized.codes[i] as f32 + cb);
+        }
+        Ok(EdgeQuantizedVector {
+            quantized,
+            ip_parent_rot_codes: ip_parent,
+        })
+    }
+
+    /// Returns the edge term of an absolute `||q − v||^2` for one edge.
+    ///
+    /// The returned value is `||v − u||^2 + f_rescale · ⟨R(q − u), xu_cb⟩`,
+    /// which under the rank-1 RaBitQ approximation equals
+    /// `||v − u||^2 − 2·⟨q − u, v − u⟩`. The caller is expected to add
+    /// `||q − u||^2` to recover an approximation of `||q − v||^2` that is
+    /// comparable across edges with different parents. See
+    /// [`quantize_edge_prerotated`](Self::quantize_edge_prerotated) for the
+    /// full decomposition and a worked example.
+    ///
+    /// # Arguments
+    ///
+    /// * `rotated_query` — `R · q`, the raw rotated query. This method does
+    ///   **not** expect the centroid-subtracted form `R · (q − c)` used by
+    ///   [`approximate_l2_sqr_prerotated`](Self::approximate_l2_sqr_prerotated);
+    ///   the edge carries its own parent in place of a global centroid. The
+    ///   residual inner product `⟨R(q − u), xu_cb⟩` is recovered internally
+    ///   as `⟨R·q, xu_cb⟩ − edge.ip_parent_rot_codes`.
+    /// * `edge` — an [`EdgeQuantizedVector`] produced by
+    ///   [`quantize_edge_prerotated`](Self::quantize_edge_prerotated).
+    #[inline]
+    pub fn edge_distance_term_prerotated(rotated_query: &[f32], edge: &EdgeQuantizedVector) -> f32 {
+        let qv = &edge.quantized;
+        let cb = -((1u32 << qv.ex_bits) as f32 - 0.5);
+        // Two-accumulator reduction for FP latency hiding.
+        let mut ip0 = 0.0f32;
+        let mut ip1 = 0.0f32;
+        let codes = &qv.codes;
+        let pairs = rotated_query.len() / 2;
+        for i in 0..pairs {
+            let j = i * 2;
+            ip0 += rotated_query[j] * (codes[j] as f32 + cb);
+            ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
+        }
+        if rotated_query.len() % 2 != 0 {
+            let last = rotated_query.len() - 1;
+            ip0 += rotated_query[last] * (codes[last] as f32 + cb);
+        }
+        let ip_qv = ip0 + ip1;
+        // <R*(q-u), xu_cb> = <R*q, xu_cb> - <R*u, xu_cb>
+        let ip_residual = ip_qv - edge.ip_parent_rot_codes;
+        (qv.f_add + qv.f_rescale * ip_residual).max(0.0)
+    }
+}
+
+/// A RaBitQ-quantized edge `R · (v − u)` that composes with an externally
+/// supplied `||q − u||^2` to give an absolute `||q − v||^2`.
+///
+/// The only way to construct this value is
+/// [`RaBitQQuantizer::quantize_edge_prerotated`]; the only way to consume it
+/// is [`RaBitQQuantizer::edge_distance_term_prerotated`]. The distinct type
+/// is how the compiler prevents an edge from being routed through
+/// [`RaBitQQuantizer::approximate_l2_sqr_prerotated`], whose ranking-score
+/// shift is not valid across different parents.
+///
+/// Fields are `pub` for inspection and serialisation; `#[non_exhaustive]`
+/// blocks out-of-crate struct-literal construction, which is what preserves
+/// the invariant that `quantized` was built against a zero centroid and that
+/// `ip_parent_rot_codes` matches the parent used for the residual.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct EdgeQuantizedVector {
+    /// Underlying quantized codes for `v − u`. Because the edge is built
+    /// against a zero centroid, `f_add` equals `||v − u||^2` exactly and
+    /// `f_rescale` equals `−2·delta`.
+    pub quantized: QuantizedVector,
+    /// `⟨R · parent, xu_cb⟩`, precomputed at build time. At search time this
+    /// turns `⟨R · q, xu_cb⟩` into `⟨R · (q − parent), xu_cb⟩` with a single
+    /// subtraction, avoiding an O(d) re-rotation per edge.
+    pub ip_parent_rot_codes: f32,
 }
 
 // ============================================================================
@@ -1002,6 +1149,107 @@ mod tests {
         let vector = vec![1.0f32; dim];
         let qv = q.quantize(&vector).unwrap();
         assert_eq!(qv.dimension, dim);
+    }
+
+    #[test]
+    fn edge_quantization_approximates_true_distance() {
+        // Core contract: for VR graph quantization, the edge term plus
+        // ||q - parent||^2 approximates ||q - v||^2. Verify that the
+        // correlation with the true distance is high across edges.
+        use std::collections::HashMap;
+
+        let dim = 128;
+        let n = 200;
+        let seed = 42;
+
+        // Unnormalized vectors (SIFT-like) so bias pathology is in scope.
+        let make_vec = |idx: usize| -> Vec<f32> {
+            let mut s = (idx as u64)
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (0..dim)
+                .map(|_| {
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (s >> 33) as f32 / (1u32 << 30) as f32 - 1.0
+                })
+                .collect()
+        };
+        let vectors: Vec<Vec<f32>> = (0..n).map(make_vec).collect();
+
+        let mut quantizer = RaBitQQuantizer::with_config(dim, seed, RaBitQConfig::bits4()).unwrap();
+        // zero centroid -- we do edge quant, centroid is per-parent.
+        quantizer.set_centroid(vec![0.0f32; dim]).unwrap();
+
+        // Pre-rotate all vectors once.
+        let rotated: HashMap<usize, Vec<f32>> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, quantizer.rotate_query(v).unwrap()))
+            .collect();
+
+        // Pick 5 random parents, quantize their first 10 neighbors.
+        let mut good_pairs = 0;
+        let mut total_pairs = 0;
+        for parent_id in (0..n).step_by(40).take(5) {
+            let u_rot = &rotated[&parent_id];
+            for neighbor_id in (parent_id + 1)..(parent_id + 11).min(n) {
+                let v_rot = &rotated[&neighbor_id];
+                let residual: Vec<f32> =
+                    v_rot.iter().zip(u_rot.iter()).map(|(v, u)| v - u).collect();
+                let edge = quantizer
+                    .quantize_edge_prerotated(u_rot, &residual)
+                    .unwrap();
+
+                // Query: pick another vector.
+                for query_id in [0, n / 2, n - 1] {
+                    let q = &vectors[query_id];
+                    let q_rot = &rotated[&query_id];
+                    let u = &vectors[parent_id];
+                    let v = &vectors[neighbor_id];
+
+                    let parent_dist: f32 =
+                        q.iter().zip(u.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+                    let true_dist: f32 = q.iter().zip(v.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+
+                    let edge_term = RaBitQQuantizer::edge_distance_term_prerotated(q_rot, &edge);
+                    let approx_dist = parent_dist + edge_term;
+
+                    // Relative error <20% is good for 4-bit RaBitQ at dim=128.
+                    let rel_err = (approx_dist - true_dist).abs() / true_dist.max(1.0);
+                    total_pairs += 1;
+                    if rel_err < 0.20 {
+                        good_pairs += 1;
+                    }
+                }
+            }
+        }
+        // At least 80% of pairs should be within 20% relative error.
+        assert!(
+            good_pairs as f32 / total_pairs as f32 > 0.8,
+            "edge approximation too loose: {}/{} pairs within 20% rel-err",
+            good_pairs,
+            total_pairs
+        );
+    }
+
+    #[test]
+    fn edge_quantization_is_type_distinct() {
+        // Compile-time check: EdgeQuantizedVector cannot be constructed by
+        // external users via struct literal (#[non_exhaustive]) and cannot
+        // be passed to approximate_l2_sqr_prerotated (takes &QuantizedVector).
+        let dim = 32;
+        let q = RaBitQQuantizer::with_config(dim, 42, RaBitQConfig::bits4()).unwrap();
+        let u_rot = vec![0.1f32; dim];
+        let res = vec![0.2f32; dim];
+        let edge = q.quantize_edge_prerotated(&u_rot, &res).unwrap();
+        // We can access edge.quantized for inspection, but the intended
+        // distance path goes through edge_distance_term_prerotated.
+        let query = vec![0.3f32; dim];
+        let q_rot = q.rotate_query(&query).unwrap();
+        let term = RaBitQQuantizer::edge_distance_term_prerotated(&q_rot, &edge);
+        assert!(term.is_finite());
     }
 
     #[test]
