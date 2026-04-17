@@ -6,7 +6,7 @@ Vector quantization.
 
 ```toml
 [dependencies]
-qntz = "0.1.0"
+qntz = "0.1"
 ```
 
 ```rust
@@ -39,7 +39,7 @@ Enable one or both:
 
 ```toml
 [dependencies]
-qntz = { version = "0.1.0", features = ["rabitq", "ternary"] }
+qntz = { version = "0.1", features = ["rabitq", "ternary"] }
 ```
 
 ## API overview
