@@ -330,6 +330,7 @@ pub fn ternary_cosine_similarity(a: &TernaryVector, b: &TernaryVector) -> f32 {
 ///
 /// Returns 0.0 if dimensions mismatch.
 #[must_use]
+#[allow(clippy::needless_range_loop)]
 pub fn asymmetric_inner_product(query: &[f32], quantized: &TernaryVector) -> f32 {
     if query.len() != quantized.dimension {
         return 0.0;

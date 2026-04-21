@@ -1324,8 +1324,6 @@ mod tests {
             .sum::<f32>()
             .sqrt();
 
-        let mut prev_error = f32::INFINITY;
-
         for bits in 1..=8 {
             let config = match bits {
                 1 => RaBitQConfig::binary(),
@@ -1364,8 +1362,7 @@ mod tests {
                 );
             }
 
-            prev_error = error;
-            let _ = prev_error; // suppress unused warning
+            let _ = error;
         }
     }
 
