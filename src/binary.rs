@@ -161,6 +161,7 @@ impl BinaryQuantizer {
     ///
     /// Returns [`VQuantError::DimensionMismatch`] if `query.len() != dim` or
     /// `code.len() < code_len()`.
+    #[allow(clippy::needless_range_loop)]
     pub fn asymmetric_distance(&self, query: &[f32], code: &[u8]) -> crate::Result<f32> {
         if query.len() != self.dim {
             return Err(VQuantError::DimensionMismatch {

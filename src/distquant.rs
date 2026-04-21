@@ -867,12 +867,7 @@ mod tests {
     #[test]
     fn test_best_distribution() {
         // Roughly Gaussian data
-        let data: Vec<f64> = (0..1000)
-            .map(|i| {
-                let x = (i as f64 - 500.0) / 200.0;
-                x
-            })
-            .collect();
+        let data: Vec<f64> = (0..1000).map(|i| (i as f64 - 500.0) / 200.0).collect();
         let (dist, mse) = best_distribution(&data, 4);
         assert!(mse < 0.05, "Best distribution MSE too high: {mse}");
         // Uniform-ish data, but the test is that it runs without panicking

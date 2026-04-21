@@ -1,3 +1,5 @@
+#![cfg(all(feature = "rabitq", feature = "ternary"))]
+
 use proptest::prelude::*;
 
 use qntz::simd_ops;
