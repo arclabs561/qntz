@@ -1,6 +1,6 @@
 # qntz
 
-Vector quantization in Rust for approximate-nearest-neighbor systems:
+Vector quantization for approximate-nearest-neighbor systems:
 RaBitQ, ternary quantization, and bit packing.
 
 ## Quickstart
