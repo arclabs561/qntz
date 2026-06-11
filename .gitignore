@@ -6,3 +6,4 @@ Cargo.lock
 qntz-python/target/
 qntz-python/.venv/
 qntz-python/Cargo.lock
+/semver-checks/
