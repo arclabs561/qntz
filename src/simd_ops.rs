@@ -136,6 +136,23 @@ pub fn unpack_binary_fast(packed: &[u8], codes: &mut [u8], dim: usize) -> crate:
 #[inline]
 #[must_use]
 pub fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
+    // With the `simd` feature this dispatches to innr's runtime
+    // AVX-512/AVX2/NEON popcount; the portable body below is the fallback.
+    // innr::hamming_distance asserts equal length, so slice to the shorter
+    // first to keep the overlapping-bytes contract documented above.
+    #[cfg(feature = "simd")]
+    let out = {
+        let len = a.len().min(b.len());
+        innr::hamming_distance(&a[..len], &b[..len])
+    };
+    #[cfg(not(feature = "simd"))]
+    let out = hamming_distance_portable(a, b);
+    out
+}
+
+#[inline]
+#[cfg(not(feature = "simd"))]
+fn hamming_distance_portable(a: &[u8], b: &[u8]) -> u32 {
     let mut dist = 0u32;
     let len = a.len().min(b.len());
 
