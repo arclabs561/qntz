@@ -42,6 +42,7 @@ use crate::VQuantError;
 /// Stores a `projected_dim × dim` rotation matrix (row-major). Each row is a
 /// unit vector; together the rows form an orthonormal set drawn from a uniform
 /// random orthogonal distribution (Gram-Schmidt on a Gaussian matrix).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BinaryQuantizer {
     /// Flattened `projected_dim × dim` rotation matrix (row-major).
     rotation: Vec<f32>,
