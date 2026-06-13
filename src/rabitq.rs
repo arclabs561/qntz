@@ -35,6 +35,7 @@ use std::collections::BinaryHeap;
 
 /// Configuration for RaBitQ quantization.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RaBitQConfig {
     /// Total bits per dimension (1-8). 1 = binary only.
     pub total_bits: usize,
@@ -166,6 +167,7 @@ pub struct QuantizedVector {
 }
 
 /// RaBitQ quantizer with extended bit support.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RaBitQQuantizer {
     dimension: usize,
     /// Random rotation matrix (orthogonal)
