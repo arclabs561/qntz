@@ -52,3 +52,13 @@ harness = false
 name = "entropy_coded_quantization"
 path = "examples/entropy_coded_quantization.rs"
 required-features = ["rabitq"]
+
+[[example]]
+name = "rabitq_error_budget"
+path = "examples/rabitq_error_budget.rs"
+required-features = ["rabitq"]
+
+[[example]]
+name = "adaptive_scan"
+path = "examples/adaptive_scan.rs"
+required-features = ["adaptive"]

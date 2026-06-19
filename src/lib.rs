@@ -82,4 +82,5 @@ pub mod binary;
 /// Bit packing + popcount-based operations for low-bit codes.
 pub mod simd_ops;
 
+#[cfg(any(feature = "rabitq", feature = "binary"))]
 pub(crate) mod rotation;

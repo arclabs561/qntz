@@ -49,6 +49,16 @@ Fallible operations return `qntz::Result<T>` (wrapping `VQuantError`) for
 dimension mismatches and invalid configs. Pure distance helpers that take
 pre-validated inputs return scalar values directly.
 
+## Examples
+
+Runnable examples live in [`examples/`](examples/):
+
+- `rabitq_error_budget.rs` compares RaBitQ bit widths using the quantizer's
+  error proxy and packed code size.
+- `adaptive_scan.rs` compares per-vector adaptive quantization against exact
+  scan distances.
+- `entropy_coded_quantization.rs` shows entropy coding over RaBitQ codes.
+
 ### `simd_ops` (always available)
 
 Bit packing, Hamming distance, asymmetric inner product / L2, and multi-bit
