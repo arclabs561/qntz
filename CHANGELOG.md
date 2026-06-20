@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Added examples for RaBitQ bit-width error budget and adaptive scan-distance
+  error.
+
 ## [0.1.9] - 2026-06-10
 
 ### Changed
