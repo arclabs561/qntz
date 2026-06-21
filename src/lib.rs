@@ -79,6 +79,10 @@ pub mod adaptive;
 /// Rotation-based binary quantization (feature-gated).
 pub mod binary;
 
+#[cfg(feature = "matryoshka")]
+/// Matryoshka scalar quantization: one code, sliceable to lower precisions (feature-gated).
+pub mod matryoshka;
+
 /// Bit packing + popcount-based operations for low-bit codes.
 pub mod simd_ops;
 

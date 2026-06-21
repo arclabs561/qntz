@@ -29,6 +29,7 @@ ternary = []
 distquant = []
 adaptive = []
 binary = []
+matryoshka = []
 
 [dev-dependencies]
 ans = "0.3"
