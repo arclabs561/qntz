@@ -277,4 +277,48 @@ mod tests {
         assert!(MatryoshkaQuantizer::new(1.0, 1.0, 8).is_err());
         assert!(MatryoshkaQuantizer::fit_minmax(&[], 8).is_err());
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        // The robustly-true MSB-slice invariants (not the rounding-approximate
+        // prefix-nesting the contract explicitly disclaims): the sliced code
+        // stays in range, full precision is the identity, and slicing is order
+        // preserving in the code. These pin Eq. 6 across the whole code space,
+        // where slice_matches_eq6 only checks three fixtures.
+
+        /// `slice(code, b)` always lands in `[0, 2^b - 1]`.
+        #[test]
+        fn slice_stays_in_b_bit_range(code in any::<u8>(), bits in 1u8..=8) {
+            let q = MatryoshkaQuantizer::new(0.0, 1.0, 8).unwrap();
+            let sliced = q.slice(code, bits);
+            let max_code = (1u16 << bits) - 1;
+            prop_assert!(
+                u16::from(sliced) <= max_code,
+                "slice({code}, {bits}) = {sliced} exceeds {max_code}"
+            );
+        }
+
+        /// Slicing to the full precision returns the code unchanged.
+        #[test]
+        fn slice_at_full_precision_is_identity(code in any::<u8>()) {
+            let q = MatryoshkaQuantizer::new(0.0, 1.0, 8).unwrap();
+            prop_assert_eq!(q.slice(code, 8), code);
+        }
+
+        /// Slicing is monotone non-decreasing in the code: a larger code never
+        /// slices to a smaller value at the same precision (MSB extraction
+        /// preserves order, so higher codes stay higher after truncation).
+        #[test]
+        fn slice_preserves_code_order(a in any::<u8>(), b in any::<u8>(), bits in 1u8..=8) {
+            let q = MatryoshkaQuantizer::new(0.0, 1.0, 8).unwrap();
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            prop_assert!(
+                q.slice(lo, bits) <= q.slice(hi, bits),
+                "slice not monotone at {bits} bits: slice({lo})={}, slice({hi})={}",
+                q.slice(lo, bits),
+                q.slice(hi, bits)
+            );
+        }
+    }
 }
