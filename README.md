@@ -7,7 +7,7 @@ RaBitQ, ternary quantization, and bit packing.
 
 ```toml
 [dependencies]
-qntz = "0.1"
+qntz = "0.2"
 ```
 
 ```rust

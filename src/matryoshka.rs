@@ -19,7 +19,7 @@
 //! slices reconstruct POORLY (the paper's "sliced" baseline). MatQuant's
 //! contribution is to choose the quantization range so that a *weighted*
 //! reconstruction error across precisions is jointly minimized.
-//! [`MatryoshkaQuantizer::fit`] does this with a clip-range search: the scalar
+//! `MatryoshkaQuantizer::fit` does this with a clip-range search: the scalar
 //! analog of the paper's gradient joint-optimization over model weights. This is
 //! NOT the full model-training method, and the int2-specific tricks from the
 //! paper (co-distillation, single-precision MatQuant, an extra outlier bit) are

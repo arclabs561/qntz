@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
 ### Added
 - `matryoshka` feature: `MatryoshkaQuantizer`, scalar Matryoshka quantization
   (Nair et al. 2025, arXiv:2502.06786). One c-bit code is sliceable to lower
