@@ -314,7 +314,7 @@ impl RaBitQQuantizer {
         let cb = -((1 << ex_bits) as f32 - 0.5);
         let xu_multibit: Vec<f32> = total_codes.iter().map(|&c| c as f32 + cb).collect();
         let (f_add, f_rescale, f_error, residual_norm) =
-            self.compute_correction_factors(&rotated, centroid, &xu_multibit);
+            self.compute_correction_factors(&rotated, &xu_multibit);
 
         // Step 7: delta/vl (xu_multibit == quantized_shifted, reuse it)
         let norm_quan_sqr: f32 = xu_multibit.iter().map(|x| x * x).sum();
@@ -428,8 +428,12 @@ impl RaBitQQuantizer {
         // Step 6: correction factors
         let cb = -((1 << ex_bits) as f32 - 0.5);
         let xu_multibit: Vec<f32> = total_codes.iter().map(|&c| c as f32 + cb).collect();
+        // `raw_centroid` is already folded into `rotated_residual` (= R·(v−c));
+        // it is retained in the signature for API compatibility and length
+        // validation but no longer feeds the estimator (see compute_correction_factors).
+        let _ = raw_centroid;
         let (f_add, f_rescale, f_error, residual_norm) =
-            self.compute_correction_factors(rotated, raw_centroid, &xu_multibit);
+            self.compute_correction_factors(rotated, &xu_multibit);
 
         // Step 7: delta/vl
         let norm_quan_sqr: f32 = xu_multibit.iter().map(|x| x * x).sum();
@@ -496,19 +500,13 @@ impl RaBitQQuantizer {
         quantize_extended(&normalized_abs, rotated, ex_bits, t)
     }
 
-    fn compute_correction_factors(
-        &self,
-        residual: &[f32],
-        centroid: &[f32],
-        xu_cb: &[f32],
-    ) -> (f32, f32, f32, f32) {
+    fn compute_correction_factors(&self, residual: &[f32], xu_cb: &[f32]) -> (f32, f32, f32, f32) {
         let dim = self.dimension;
 
         let l2_sqr: f32 = residual.iter().map(|x| x * x).sum();
         let l2_norm = l2_sqr.sqrt();
         let xu_cb_norm_sqr: f32 = xu_cb.iter().map(|x| x * x).sum();
         let ip_resi_xucb: f32 = residual.iter().zip(xu_cb.iter()).map(|(r, x)| r * x).sum();
-        let ip_cent_xucb: f32 = centroid.iter().zip(xu_cb.iter()).map(|(c, x)| c * x).sum();
 
         let denom = if ip_resi_xucb.abs() <= f32::EPSILON {
             f32::INFINITY
@@ -527,7 +525,13 @@ impl RaBitQQuantizer {
             }
         }
 
-        let f_add = l2_sqr + 2.0 * l2_sqr * ip_cent_xucb / denom;
+        // f_add is the per-document constant of the residual-space ranking
+        // estimator: dist ~= ||x-c||^2 - 2<q-c, x-c>, so f_add = ||x-c||^2.
+        // (The query-only ||q-c||^2 term is dropped; it does not affect ranking.
+        // This matches the documented prerotated semantics ||q-v||^2 - ||q-c||^2.)
+        // An earlier version added 2*l2_sqr*<raw_centroid, rotated_codes>/denom,
+        // which mixes spaces and corrupts ranking once the centroid is non-zero.
+        let f_add = l2_sqr;
         let f_rescale = -2.0 * l2_sqr / denom;
         let f_error = 2.0 * tmp_error;
 
@@ -599,7 +603,11 @@ impl RaBitQQuantizer {
             ip0 += rotated_query[last] * (codes[last] as f32 + cb);
         }
         let ip = ip0 + ip1;
-        (quantized.f_add + quantized.f_rescale * ip).max(0.0)
+        // Ranking proxy ||q-v||^2 - ||q-c||^2: monotonic in true distance but
+        // legitimately NEGATIVE for near neighbors, so it must NOT be clamped
+        // (clamping collapses the nearest candidates to 0 and loses their order).
+        // For an absolute distance, add ||rotated_query||^2 (= ||q-c||^2) once.
+        quantized.f_add + quantized.f_rescale * ip
     }
 
     /// Approximate L2 distance squared.
@@ -632,7 +640,13 @@ impl RaBitQQuantizer {
             ip += q * code_val;
         }
 
-        let dist = quantized.f_add + quantized.f_rescale * ip;
+        // `f_add + f_rescale*ip` estimates ||q-x||^2 - ||q-c||^2 (a ranking
+        // proxy that is legitimately negative for near neighbors). Add the
+        // query-side ||q-c||^2 to recover the absolute squared distance, which is
+        // non-negative and ranking-correct. Without it the trailing `.max(0.0)`
+        // collapses all near neighbors to 0 and destroys their ordering.
+        let q_resid_norm_sqr: f32 = query_residual.iter().map(|x| x * x).sum();
+        let dist = q_resid_norm_sqr + quantized.f_add + quantized.f_rescale * ip;
         Ok(dist.max(0.0))
     }
 
@@ -1366,6 +1380,197 @@ mod tests {
 
             let _ = error;
         }
+    }
+
+    /// Regression: with a FITTED (non-zero) centroid, the approximate distance
+    /// must still rank near neighbors well. A spurious centroid cross-term in
+    /// `f_add` (`<raw centroid, rotated codes>`) once corrupted this so recall
+    /// hovered near 0.5 regardless of bit width, while zero-centroid tests
+    /// (`test_extended_rabitq_all_widths`) passed because the term vanishes at
+    /// c = 0. Filter-then-rerank recall@10 must be near-perfect at 8 bits.
+    #[test]
+    fn fitted_centroid_preserves_near_neighbor_ranking() {
+        let dim = 64;
+        let n = 400;
+        // Deterministic clustered data so true near neighbors exist.
+        let mut s = 0x1234_5678_u64;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f32 / (1u32 << 31) as f32 - 1.0
+        };
+        let centers: Vec<Vec<f32>> = (0..8)
+            .map(|_| (0..dim).map(|_| rng() * 3.0).collect())
+            .collect();
+        let data: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                let c = &centers[i % 8];
+                c.iter().map(|&v| v + 0.3 * rng()).collect()
+            })
+            .collect();
+        let flat: Vec<f32> = data.iter().flatten().copied().collect();
+
+        let mut q = RaBitQQuantizer::with_config(dim, 42, RaBitQConfig::bits8()).unwrap();
+        q.fit(&flat, n).unwrap();
+        let codes: Vec<_> = data.iter().map(|v| q.quantize(v).unwrap()).collect();
+
+        let (k, c_budget, nq) = (10usize, 50usize, 20usize);
+        let mut recall = 0.0;
+        for qi in 0..nq {
+            let query = &data[(qi * 7) % n];
+            let exact: Vec<f32> = data
+                .iter()
+                .map(|d| d.iter().zip(query).map(|(a, b)| (a - b) * (a - b)).sum())
+                .collect();
+            let mut eidx: Vec<usize> = (0..n).collect();
+            eidx.sort_by(|&a, &b| exact[a].total_cmp(&exact[b]));
+            let truek = &eidx[..k];
+            let approx: Vec<f32> = codes
+                .iter()
+                .map(|c| q.approximate_l2_sqr(query, c).unwrap())
+                .collect();
+            let mut aidx: Vec<usize> = (0..n).collect();
+            aidx.sort_by(|&a, &b| approx[a].total_cmp(&approx[b]));
+            let cand = &aidx[..c_budget];
+            let hits = truek.iter().filter(|t| cand.contains(t)).count();
+            recall += hits as f64 / k as f64;
+        }
+        recall /= nq as f64;
+        assert!(
+            recall > 0.9,
+            "fitted-centroid recall@{k} within C={c_budget} too low: {recall:.3} \
+             (centroid cross-term corrupting ranking?)"
+        );
+    }
+
+    /// Regression for the clamp bug: `approximate_l2_sqr` must return the
+    /// ABSOLUTE squared distance, so it tracks true distance with low relative
+    /// error on in-distribution pairs. The clamped proxy returned ~0 for any
+    /// pair closer than the query is to the centroid (true distance smaller than
+    /// `||q-c||^2`), inflating relative error toward 1.0 on exactly the near
+    /// pairs that matter.
+    #[test]
+    fn approximate_l2_sqr_tracks_true_distance() {
+        let dim = 64;
+        let mut s = 0xBEEF_u64;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f32 / (1u32 << 31) as f32 - 0.5
+        };
+        // Clustered data so the fitted centroid is non-zero and near pairs exist.
+        let centers: Vec<Vec<f32>> = (0..6)
+            .map(|_| (0..dim).map(|_| rng() * 4.0).collect())
+            .collect();
+        let data: Vec<Vec<f32>> = (0..300)
+            .map(|i| {
+                let c = &centers[i % 6];
+                c.iter().map(|&v| v + 0.4 * rng()).collect()
+            })
+            .collect();
+        let flat: Vec<f32> = data.iter().flatten().copied().collect();
+        let mut q = RaBitQQuantizer::with_config(dim, 7, RaBitQConfig::bits8()).unwrap();
+        q.fit(&flat, data.len()).unwrap();
+
+        let query = &data[0];
+        let mut rel_errs = Vec::new();
+        for target in data.iter().skip(1).take(60) {
+            let true_d2: f32 = query
+                .iter()
+                .zip(target)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            if true_d2 < 1.0 {
+                continue; // skip near-duplicates where relative error is unstable
+            }
+            let approx = q
+                .approximate_l2_sqr(query, &q.quantize(target).unwrap())
+                .unwrap();
+            rel_errs.push((approx - true_d2).abs() / true_d2);
+        }
+        let mean_rel = rel_errs.iter().sum::<f32>() / rel_errs.len() as f32;
+        assert!(
+            mean_rel < 0.3,
+            "8-bit estimate mean relative error {mean_rel:.3} too high \
+             (clamped proxy / spurious centroid term regression?)"
+        );
+    }
+
+    proptest::proptest! {
+        /// Property: for random fitted data, the 8-bit approximate distance from a
+        /// query to its OWN quantized code is far smaller than to a random other
+        /// point. Catches gross miscalibration (clamp, spurious centroid term,
+        /// space mixups) without asserting a brittle absolute tolerance.
+        #[test]
+        fn approx_self_distance_smaller_than_cross(seed in 1u64..1_000_000) {
+            let dim = 32;
+            let mut s = seed;
+            let mut rng = || {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (s >> 33) as f32 / (1u32 << 31) as f32 - 0.5
+            };
+            let data: Vec<Vec<f32>> = (0..64).map(|_| (0..dim).map(|_| rng() * 10.0).collect()).collect();
+            let flat: Vec<f32> = data.iter().flatten().copied().collect();
+            let mut q = RaBitQQuantizer::with_config(dim, 1, RaBitQConfig::bits8()).unwrap();
+            q.fit(&flat, data.len()).unwrap();
+
+            let self_d = q.approximate_l2_sqr(&data[0], &q.quantize(&data[0]).unwrap()).unwrap();
+            let cross_d = q.approximate_l2_sqr(&data[0], &q.quantize(&data[32]).unwrap()).unwrap();
+            proptest::prop_assert!(self_d >= 0.0, "absolute distance must be non-negative, got {self_d}");
+            proptest::prop_assert!(
+                self_d < cross_d,
+                "approx self-distance {self_d:.3} should be < cross-distance {cross_d:.3}"
+            );
+        }
+    }
+
+    /// Ties the two estimators together so the otherwise-untested
+    /// `approximate_l2_sqr_prerotated` is guarded: the absolute estimator equals
+    /// the prerotated ranking proxy plus the query constant `||q-c||^2`
+    /// (= `||rotate_query(q)||^2`, since the rotation is orthogonal). Any
+    /// arithmetic drift in either estimator breaks the identity. Without this,
+    /// mutation testing leaves ~40 survivors in the prerotated path.
+    #[test]
+    fn prerotated_proxy_plus_query_norm_equals_absolute() {
+        let dim = 48;
+        let mut s = 0xC0FFEE_u64;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f32 / (1u32 << 31) as f32 - 0.5
+        };
+        // Offset all data far from the origin so the fitted centroid is large
+        // and the query-residual sign genuinely matters.
+        let data: Vec<Vec<f32>> = (0..200)
+            .map(|_| (0..dim).map(|_| 20.0 + rng() * 4.0).collect())
+            .collect();
+        let flat: Vec<f32> = data.iter().flatten().copied().collect();
+        let mut q = RaBitQQuantizer::with_config(dim, 9, RaBitQConfig::bits8()).unwrap();
+        q.fit(&flat, data.len()).unwrap();
+
+        let query = &data[0];
+        let rq = q.rotate_query(query).unwrap();
+        let qc2: f32 = rq.iter().map(|x| x * x).sum(); // ||q-c||^2
+        let mut checked = 0;
+        for target in data.iter().skip(1).take(40) {
+            let qv = q.quantize(target).unwrap();
+            let abs = q.approximate_l2_sqr(query, &qv).unwrap();
+            let proxy = RaBitQQuantizer::approximate_l2_sqr_prerotated(&rq, &qv);
+            // abs = max(0, qc2 + proxy); only assert where the clamp is inactive.
+            if qc2 + proxy > 1.0 {
+                let rel = (abs - (qc2 + proxy)).abs() / abs.max(1.0);
+                assert!(
+                    rel < 1e-3,
+                    "prerotated identity broken: abs={abs:.3} qc2+proxy={:.3} rel={rel:.4}",
+                    qc2 + proxy
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 10, "test exercised too few pairs ({checked})");
     }
 
     /// Verify const-scaling works with all bit widths.
