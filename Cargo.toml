@@ -63,3 +63,8 @@ required-features = ["rabitq"]
 name = "adaptive_scan"
 path = "examples/adaptive_scan.rs"
 required-features = ["adaptive"]
+
+[[example]]
+name = "sift_rabitq_recall"
+path = "examples/sift_rabitq_recall.rs"
+required-features = ["rabitq"]

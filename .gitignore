@@ -1,9 +1,14 @@
 target/
 Cargo.lock
 
+# Real datasets fetched by scripts/fetch_*.sh (examples only)
+/data/
 
 # Python bindings build artifacts
 qntz-python/target/
 qntz-python/.venv/
 qntz-python/Cargo.lock
 /semver-checks/
+
+# cargo-mutants generated output
+/mutants.out*/
