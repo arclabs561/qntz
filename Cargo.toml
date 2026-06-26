@@ -73,3 +73,8 @@ required-features = ["rabitq"]
 name = "matryoshka_precision_scan"
 path = "examples/matryoshka_precision_scan.rs"
 required-features = ["matryoshka"]
+
+[[example]]
+name = "additive_codebook_refinement"
+path = "examples/additive_codebook_refinement.rs"
+required-features = ["matryoshka"]

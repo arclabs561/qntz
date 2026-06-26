@@ -44,7 +44,7 @@ bits  recall@10  mean distance relative error  stored code bytes/doc
 
 ## `matryoshka_precision_scan.rs`
 
-Quantizes documents once at 8 bits with a joint parent-code objective, then
+Compares nearest 8-bit parent codes with a joint parent-code objective, then
 slices the same stored scalar codes to 2, 4, and 8 bits during scan.
 
 ```sh
@@ -56,10 +56,33 @@ Expected output:
 ```text
 dataset: 256 docs, dim=64, top-10
 one stored 8-bit code per scalar, sliced at query time
-bits  recall@10  mean distance relative error  stored bytes/doc
-   2     0.400                        6.0471                64
-   4     0.400                        0.4694                64
-   8     0.800                        0.0040                64
+mode     bits  recall@10  mean distance relative error  stored bytes/doc
+nearest     2     0.600                        6.0608                64
+nearest     4     0.500                        0.4809                64
+nearest     8     0.900                        0.0035                64
+  joint     2     0.400                        6.0471                64
+  joint     4     0.400                        0.4694                64
+  joint     8     0.800                        0.0040                64
+```
+
+## `additive_codebook_refinement.rs`
+
+Encodes each scalar with ordered additive codebook choices, then scans with the
+first 1, 2, or 3 refinement stages active.
+
+```sh
+cargo run --release --features matryoshka --example additive_codebook_refinement
+```
+
+Expected output:
+
+```text
+dataset: 256 docs, dim=64, top-10
+ordered additive codebooks, enabling more stages at scan time
+stages  recall@10  mean distance relative error  active bytes/doc
+     1     0.400                        0.4848                64
+     2     0.500                        0.0807               128
+     3     0.300                        0.0126               192
 ```
 
 ## `entropy_coded_quantization.rs`

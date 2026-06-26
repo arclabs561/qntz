@@ -5,9 +5,10 @@
 //! codes to 2, 4, and 8 bits, reconstructs on the shared grid, and compares the
 //! resulting scan against exact L2.
 //!
-//! The stored codes use an example-local joint parent-code selector: instead of
-//! nearest 8-bit rounding, it chooses the parent code whose sliced
-//! reconstructions minimize a weighted error across the target precisions.
+//! The example compares ordinary nearest 8-bit parent codes against an
+//! example-local joint parent-code selector. The joint selector chooses the
+//! parent code whose sliced reconstructions minimize a weighted error across
+//! the target precisions.
 //!
 //! Run: cargo run --release --features matryoshka --example matryoshka_precision_scan
 
@@ -23,47 +24,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let query = make_query(&docs[37]);
     let values: Vec<f32> = docs.iter().flat_map(|doc| doc.iter().copied()).collect();
     let quantizer = MatryoshkaQuantizer::fit(&values, 8, &[8, 4, 2], &[0.2, 0.3, 1.0])?;
-    let codes: Vec<Vec<u8>> = docs
-        .iter()
-        .map(|doc| {
-            doc.iter()
-                .map(|&value| joint_parent_code(&quantizer, value))
-                .collect()
-        })
-        .collect();
-
     let exact_distances: Vec<f32> = docs.iter().map(|doc| l2_sqr(&query, doc)).collect();
     let exact_top = top_k_from_distances(&exact_distances, TOP_K);
-    let mut rows = Vec::new();
 
     println!("dataset: {N_DOCS} docs, dim={DIM}, top-{TOP_K}");
-    println!("one stored 8-bit code per scalar, sliced at query time");
-    println!("bits  recall@10  mean distance relative error  stored bytes/doc");
+    println!("one stored 8-bit code per scalar, sliced at query time\n");
+    println!("mode     bits  recall@10  mean distance relative error  stored bytes/doc");
 
-    for bits in [2u8, 4, 8] {
-        let approx_distances: Vec<f32> = codes
-            .iter()
-            .map(|doc_codes| sliced_l2_sqr(&query, doc_codes, &quantizer, bits))
-            .collect();
-        let approx_top = top_k_from_distances(&approx_distances, TOP_K);
-        let recall = recall_at_k(&exact_top, &approx_top);
-        let mean_rel_err = mean_relative_error(&exact_distances, &approx_distances);
-        let stored_bytes = codes[0].len();
+    for mode in [ParentCodeMode::Nearest, ParentCodeMode::Joint] {
+        let codes = make_codes(&docs, &quantizer, mode);
+        let mut rows = Vec::new();
 
-        println!("{bits:>4}  {recall:>8.3}  {mean_rel_err:>28.4}  {stored_bytes:>16}");
-        rows.push((bits, recall, mean_rel_err));
+        for bits in [2u8, 4, 8] {
+            let approx_distances: Vec<f32> = codes
+                .iter()
+                .map(|doc_codes| sliced_l2_sqr(&query, doc_codes, &quantizer, bits))
+                .collect();
+            let approx_top = top_k_from_distances(&approx_distances, TOP_K);
+            let recall = recall_at_k(&exact_top, &approx_top);
+            let mean_rel_err = mean_relative_error(&exact_distances, &approx_distances);
+            let stored_bytes = codes[0].len();
+
+            println!(
+                "{mode:>7}  {bits:>4}  {recall:>8.3}  {mean_rel_err:>28.4}  {stored_bytes:>16}",
+                mode = mode.label()
+            );
+            rows.push((bits, recall, mean_rel_err));
+        }
+
+        let err2 = rows.iter().find(|(bits, _, _)| *bits == 2).unwrap().2;
+        let err4 = rows.iter().find(|(bits, _, _)| *bits == 4).unwrap().2;
+        let err8 = rows.iter().find(|(bits, _, _)| *bits == 8).unwrap().2;
+        let recall2 = rows.iter().find(|(bits, _, _)| *bits == 2).unwrap().1;
+        let recall8 = rows.iter().find(|(bits, _, _)| *bits == 8).unwrap().1;
+
+        assert!(err8 < err4 && err4 < err2);
+        assert!(recall8 >= recall2);
     }
 
-    let err2 = rows.iter().find(|(bits, _, _)| *bits == 2).unwrap().2;
-    let err4 = rows.iter().find(|(bits, _, _)| *bits == 4).unwrap().2;
-    let err8 = rows.iter().find(|(bits, _, _)| *bits == 8).unwrap().2;
-    let recall2 = rows.iter().find(|(bits, _, _)| *bits == 2).unwrap().1;
-    let recall8 = rows.iter().find(|(bits, _, _)| *bits == 8).unwrap().1;
-
-    assert!(err8 < err4 && err4 < err2);
-    assert!(recall8 >= recall2);
-
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ParentCodeMode {
+    Nearest,
+    Joint,
+}
+
+impl ParentCodeMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nearest => "nearest",
+            Self::Joint => "joint",
+        }
+    }
+}
+
+fn make_codes(
+    docs: &[Vec<f32>],
+    quantizer: &MatryoshkaQuantizer,
+    mode: ParentCodeMode,
+) -> Vec<Vec<u8>> {
+    docs.iter()
+        .map(|doc| {
+            doc.iter()
+                .map(|&value| match mode {
+                    ParentCodeMode::Nearest => quantizer.quantize(value),
+                    ParentCodeMode::Joint => joint_parent_code(quantizer, value),
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn sliced_l2_sqr(
