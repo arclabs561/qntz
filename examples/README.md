@@ -42,6 +42,26 @@ bits  recall@10  mean distance relative error  stored code bytes/doc
    8     1.000                        0.0009         96
 ```
 
+## `matryoshka_precision_scan.rs`
+
+Quantizes documents once at 8 bits with a joint parent-code objective, then
+slices the same stored scalar codes to 2, 4, and 8 bits during scan.
+
+```sh
+cargo run --release --features matryoshka --example matryoshka_precision_scan
+```
+
+Expected output:
+
+```text
+dataset: 256 docs, dim=64, top-10
+one stored 8-bit code per scalar, sliced at query time
+bits  recall@10  mean distance relative error  stored bytes/doc
+   2     0.400                        6.0471                64
+   4     0.400                        0.4694                64
+   8     0.800                        0.0040                64
+```
+
 ## `entropy_coded_quantization.rs`
 
 Shows entropy coding over RaBitQ codes.
