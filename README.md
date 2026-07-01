@@ -1,7 +1,6 @@
 # qntz
 
-Vector quantization for approximate-nearest-neighbor systems:
-RaBitQ, ternary quantization, and bit packing.
+Vector quantization.
 
 ## Quickstart
 
@@ -31,12 +30,18 @@ assert_eq!(d, 2);
 All quantization modules are feature-gated. The default build provides only the
 core bit-packing helpers in `simd_ops`.
 
-| Feature   | What it adds |
-|-----------|--------------|
-| `rabitq`  | RaBitQ quantizer -- 1-bit sign codes with optional extended bits (up to 8-bit total) and correction factors for approximate L2 distance |
-| `ternary` | Ternary (1.58-bit) quantizer -- maps each dimension to {-1, 0, +1} with configurable thresholds and adaptive sparsity |
+| Feature | What it adds |
+|---|---|
+| `simd` | dispatches supported bit operations through `innr` |
+| `serde` | derives for serializing trained quantizers and codebooks |
+| `rabitq` | RaBitQ quantizer with 1-8 bit scalar codes and L2 correction terms |
+| `ternary` | ternary quantizer with configurable thresholds and adaptive sparsity |
+| `distquant` | distribution-aware scalar quantization utilities |
+| `adaptive` | per-vector adaptive scalar quantization |
+| `binary` | rotation-based binary quantization |
+| `matryoshka` | scalar codes that can be scanned at multiple precisions |
 
-Enable one or both:
+Enable selected modules:
 
 ```toml
 [dependencies]
