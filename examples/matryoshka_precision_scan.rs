@@ -1,9 +1,8 @@
 //! Scan the same Matryoshka codes at multiple bit precisions.
 //!
-//! This is a Matryoshka `qntz` proof sketch, not a new retrieval API. Documents
-//! are quantized once at 8 bits. At query time, the example slices those stored
-//! codes to 2, 4, and 8 bits, reconstructs on the shared grid, and compares the
-//! resulting scan against exact L2.
+//! Documents are quantized once at 8 bits. At query time, the example slices
+//! those stored codes to 2, 4, and 8 bits, reconstructs on the shared grid, and
+//! compares the resulting scan against exact L2.
 //!
 //! The example compares ordinary nearest 8-bit parent codes against an
 //! example-local joint parent-code selector. The joint selector chooses the

@@ -1,9 +1,8 @@
-//! Drop-by-Drop-style additive codebook refinement.
+//! Additive codebook refinement over scalar quantization codes.
 //!
-//! This is a tiny scalar analog of additive-codebook multi-bitwidth
-//! quantization. Each value is encoded by an ordered list of codebook choices.
-//! Reconstruction with the first stage gives a coarse approximation; enabling
-//! later stages adds refinement terms from later codebooks.
+//! Each value is encoded by an ordered list of codebook choices. Reconstruction
+//! with the first stage gives a coarse approximation; enabling later stages
+//! adds refinement terms from later codebooks.
 //!
 //! Run: cargo run --release --features matryoshka --example additive_codebook_refinement
 

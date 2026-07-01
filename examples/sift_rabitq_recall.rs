@@ -4,12 +4,6 @@
 //! distance, rerank the top-C candidates by exact L2. Reports recall@10 against
 //! code budget; C=10 is the no-rerank baseline.
 //!
-//! Doubles as the regression guard for two estimator bugs fixed in the rabitq
-//! module: a spurious centroid cross-term in `f_add`, and a `.max(0.0)` clamp
-//! that collapsed the near-neighbor ranking proxy. With both fixed, recall@10
-//! rises with bit width (around 0.54 at 1-bit to 0.99 at 8-bit with no rerank)
-//! and reaches ~1.0 with a small rerank budget.
-//!
 //! ```sh
 //! ./scripts/fetch_siftsmall.sh
 //! cargo run --release --features rabitq --example sift_rabitq_recall
@@ -62,12 +56,12 @@ fn main() -> ExitCode {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/siftsmall");
     let base_path = dir.join("siftsmall_base.fvecs");
     let query_path = dir.join("siftsmall_query.fvecs");
-    if !base_path.exists() {
-        eprintln!(
+    if !base_path.exists() || !query_path.exists() {
+        println!(
             "dataset not found at {}\nrun: ./scripts/fetch_siftsmall.sh",
             dir.display()
         );
-        return ExitCode::FAILURE;
+        return ExitCode::SUCCESS;
     }
 
     let base = read_fvecs(&base_path).unwrap();

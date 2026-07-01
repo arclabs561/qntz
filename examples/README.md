@@ -1,9 +1,13 @@
-# Examples
+# qntz examples
 
 The examples are deterministic and print quantitative checks rather than timing
 claims. Use the benchmarks for throughput measurements.
 
-## `rabitq_error_budget.rs`
+`sift_rabitq_recall` uses the gitignored SIFT-small dataset fetched by
+`scripts/fetch_siftsmall.sh`. If the data is absent, it prints the fetch command
+and exits successfully.
+
+## `rabitq_error_budget`
 
 Compares RaBitQ bit widths using the quantizer's error proxy and packed code
 size.
@@ -12,7 +16,7 @@ size.
 cargo run --release --features rabitq --example rabitq_error_budget
 ```
 
-Expected output:
+Output:
 
 ```text
 dataset: 512 docs, dim=64
@@ -23,7 +27,7 @@ bits  mean relative error proxy  mean residual norm  bytes/code
    8                     0.0004              6.3110        64.0
 ```
 
-## `adaptive_scan.rs`
+## `adaptive_scan`
 
 Quantizes a batch with per-vector scalar ranges and compares asymmetric scan
 distances against exact L2.
@@ -32,7 +36,7 @@ distances against exact L2.
 cargo run --release --features adaptive --example adaptive_scan
 ```
 
-Expected output:
+Output:
 
 ```text
 dataset: 256 docs, dim=96, top-10
@@ -42,7 +46,7 @@ bits  recall@10  mean distance relative error  stored code bytes/doc
    8     1.000                        0.0009         96
 ```
 
-## `matryoshka_precision_scan.rs`
+## `matryoshka_precision_scan`
 
 Compares nearest 8-bit parent codes with a joint parent-code objective, then
 slices the same stored scalar codes to 2, 4, and 8 bits during scan.
@@ -51,11 +55,12 @@ slices the same stored scalar codes to 2, 4, and 8 bits during scan.
 cargo run --release --features matryoshka --example matryoshka_precision_scan
 ```
 
-Expected output:
+Output:
 
 ```text
 dataset: 256 docs, dim=64, top-10
 one stored 8-bit code per scalar, sliced at query time
+
 mode     bits  recall@10  mean distance relative error  stored bytes/doc
 nearest     2     0.600                        6.0608                64
 nearest     4     0.500                        0.4809                64
@@ -65,7 +70,7 @@ nearest     8     0.900                        0.0035                64
   joint     8     0.800                        0.0040                64
 ```
 
-## `additive_codebook_refinement.rs`
+## `additive_codebook_refinement`
 
 Encodes each scalar with ordered additive codebook choices, then scans with the
 first 1, 2, or 3 refinement stages active.
@@ -74,7 +79,7 @@ first 1, 2, or 3 refinement stages active.
 cargo run --release --features matryoshka --example additive_codebook_refinement
 ```
 
-Expected output:
+Output:
 
 ```text
 dataset: 256 docs, dim=64, top-10
@@ -85,15 +90,15 @@ stages  recall@10  mean distance relative error  active bytes/doc
      3     0.300                        0.0126               192
 ```
 
-## `entropy_coded_quantization.rs`
+## `entropy_coded_quantization`
 
-Shows entropy coding over RaBitQ codes.
+Entropy-codes RaBitQ scalar codes with ANS and verifies round-trip decoding.
 
 ```sh
 cargo run --release --features rabitq --example entropy_coded_quantization
 ```
 
-Expected excerpt:
+Output excerpt:
 
 ```text
 Roundtrip verified: all 32000 symbols match.
@@ -103,5 +108,31 @@ Size comparison:
   fixed-width (4-bit):       16000 bytes
   ANS entropy-coded:         15433 bytes  (1.04x vs fixed-width)
   theoretical minimum:       15430 bytes  (Shannon entropy)
+  ANS overhead vs theory: 0.0%
   bits/symbol: fixed=4, ANS=3.858, entropy=3.857
+```
+
+## `sift_rabitq_recall`
+
+Quantizes SIFT-small base vectors with RaBitQ, filters by approximate distance,
+reranks the candidate set by exact L2, and reports recall@10.
+
+```sh
+./scripts/fetch_siftsmall.sh
+cargo run --release --features rabitq --example sift_rabitq_recall
+```
+
+Output:
+
+```text
+base: 10000 x 128   queries: 100   k = 10
+
+float32 baseline: 512 bytes/vector
+recall@10 at candidate budget C (C=10 is no-rerank):
+
+    bits   bytes/vec   ratio   C=10     C=50     C=100    C=500
+       1          16     32x   0.535   0.933   0.986   1.000
+       2          32     16x   0.742   0.997   1.000   1.000
+       4          64      8x   0.900   1.000   1.000   1.000
+       8         128      4x   0.989   1.000   1.000   1.000
 ```

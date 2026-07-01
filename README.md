@@ -40,7 +40,7 @@ Enable one or both:
 
 ```toml
 [dependencies]
-qntz = { version = "0.1", features = ["rabitq", "ternary"] }
+qntz = { version = "0.2", features = ["rabitq", "ternary"] }
 ```
 
 ## API overview
@@ -51,13 +51,18 @@ pre-validated inputs return scalar values directly.
 
 ## Examples
 
-Runnable examples live in [`examples/`](examples/):
+Runnable examples live in [`examples/`](examples/README.md):
 
 - `rabitq_error_budget.rs` compares RaBitQ bit widths using the quantizer's
   error proxy and packed code size.
 - `adaptive_scan.rs` compares per-vector adaptive quantization against exact
   scan distances.
-- `entropy_coded_quantization.rs` shows entropy coding over RaBitQ codes.
+- `matryoshka_precision_scan.rs` scans one stored scalar code at multiple bit
+  precisions.
+- `additive_codebook_refinement.rs` scans ordered additive codebook stages.
+- `entropy_coded_quantization.rs` entropy-codes RaBitQ scalar codes with ANS.
+- `sift_rabitq_recall.rs` reports RaBitQ recall on SIFT-small with
+  filter-then-rerank.
 
 ### `simd_ops` (always available)
 
