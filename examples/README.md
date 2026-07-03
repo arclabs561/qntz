@@ -29,8 +29,8 @@ bits  mean relative error proxy  mean residual norm  bytes/code
 
 ## `adaptive_scan`
 
-Quantizes a batch with per-vector scalar ranges and compares asymmetric scan
-distances against exact L2.
+Quantizes a batch with per-vector scalar ranges, scans through a reusable
+scan plan, and compares asymmetric distances against exact L2.
 
 ```sh
 cargo run --release --features adaptive --example adaptive_scan

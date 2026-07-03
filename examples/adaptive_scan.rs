@@ -16,7 +16,8 @@ fn main() -> qntz::Result<()> {
     for bits in [2u8, 4, 8] {
         let quantizer = AdaptiveQuantizer::new(bits)?;
         let batch = quantizer.quantize_packed(&docs)?;
-        batch.asymmetric_distances_into(&query, &mut distances)?;
+        let scan_plan = batch.scan_plan();
+        scan_plan.asymmetric_distances_into(&query, &mut distances)?;
         let approx = top_k_from_distances(&distances, TOP_K);
 
         let recall = recall_at_k(&exact, &approx);
