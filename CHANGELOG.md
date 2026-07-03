@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Bumped the optional `innr` dependency (behind the `simd` feature) to 0.6.
+  Recorded retroactively: the bump shipped without a changelog entry (the
+  last recorded innr version was 0.4, in 0.1.9).
+
 ## [0.2.0] - 2026-06-24
 
 ### Added
