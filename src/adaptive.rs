@@ -303,6 +303,17 @@ impl PackedBatch {
     /// Returns one distance per vector. The query must have the same
     /// dimensionality as the stored vectors.
     pub fn asymmetric_distances(&self, query: &[f32]) -> Result<Vec<f32>> {
+        let mut distances = Vec::with_capacity(self.len());
+        self.asymmetric_distances_into(query, &mut distances)?;
+        Ok(distances)
+    }
+
+    /// Compute asymmetric L2 squared distances into `distances`, reusing its
+    /// allocation across repeated scans.
+    ///
+    /// Clears `distances` before writing one value per vector. The query must
+    /// have the same dimensionality as the stored vectors.
+    pub fn asymmetric_distances_into(&self, query: &[f32], distances: &mut Vec<f32>) -> Result<()> {
         if !self.is_empty() && query.len() != self.dim {
             return Err(VQuantError::DimensionMismatch {
                 expected: self.dim,
@@ -313,7 +324,8 @@ impl PackedBatch {
         let n = self.len();
         let dim = self.dim;
         let num_codes = 1usize << self.bits;
-        let mut distances = Vec::with_capacity(n);
+        distances.clear();
+        distances.reserve(n);
 
         for i in 0..n {
             let scale = self.scales[i];
@@ -332,7 +344,7 @@ impl PackedBatch {
             distances.push(dist);
         }
 
-        Ok(distances)
+        Ok(())
     }
 
     /// Dequantize a single vector from the batch by index.
@@ -586,6 +598,27 @@ mod tests {
     }
 
     #[test]
+    fn test_packed_asymmetric_distances_into_matches_allocating() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.07 - 1.0).collect();
+        let docs: Vec<Vec<f32>> = (0..5)
+            .map(|j| (0..32).map(|i| (i as f32 + j as f32) * 0.1 - 0.5).collect())
+            .collect();
+
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let expected = packed.asymmetric_distances(&query).unwrap();
+        let mut out = Vec::with_capacity(16);
+        let capacity = out.capacity();
+        packed.asymmetric_distances_into(&query, &mut out).unwrap();
+
+        assert_eq!(out, expected);
+        assert!(
+            out.capacity() >= capacity,
+            "caller-provided capacity should be reused"
+        );
+    }
+
+    #[test]
     fn test_packed_asymmetric_distance_dimension_mismatch() {
         let quantizer = AdaptiveQuantizer::new(4).unwrap();
         let docs = vec![vec![1.0, 2.0, 3.0]];
@@ -749,6 +782,9 @@ mod proptests {
 
             let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.1).collect();
             let packed_dists = packed.asymmetric_distances(&query).unwrap();
+            let mut packed_dists_into = Vec::new();
+            packed.asymmetric_distances_into(&query, &mut packed_dists_into).unwrap();
+            prop_assert_eq!(&packed_dists_into, &packed_dists);
 
             for (i, ind) in individual.iter().enumerate() {
                 let ind_dist = AdaptiveQuantizer::asymmetric_distance(&query, ind);

@@ -1,6 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use qntz::simd_ops::{hamming_distance, pack_binary_fast, unpack_binary_fast};
+use qntz::simd_ops::{
+    batch_asymmetric_l2, batch_asymmetric_l2_into, batch_hamming_distances,
+    batch_hamming_distances_into, hamming_distance, pack_binary_fast, unpack_binary_fast,
+};
 
 // ============================================================================
 // Helpers
@@ -86,6 +89,61 @@ fn bench_hamming_distance(c: &mut Criterion) {
             b_bench.iter(|| hamming_distance(black_box(&a), black_box(&b)));
         });
     }
+    group.finish();
+}
+
+fn bench_batch_distance_reuse(c: &mut Criterion) {
+    let dim = 768usize;
+    let n = 256usize;
+    let query_bits = make_packed(dim, 11);
+    let codes_bits: Vec<Vec<u8>> = (0..n).map(|i| make_packed(dim, i as u64 + 100)).collect();
+    let codes_bit_refs: Vec<&[u8]> = codes_bits.iter().map(|v| v.as_slice()).collect();
+
+    let query = make_f32_vec(dim, 22);
+    let codes_l2: Vec<Vec<u8>> = (0..n)
+        .map(|i| {
+            let mut state = i as u64 + 500;
+            (0..dim.div_ceil(8))
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (state >> 56) as u8
+                })
+                .collect()
+        })
+        .collect();
+    let codes_l2_refs: Vec<&[u8]> = codes_l2.iter().map(|v| v.as_slice()).collect();
+
+    let mut group = c.benchmark_group("batch_distance_reuse");
+    group.throughput(Throughput::Elements((dim * n) as u64));
+    group.bench_function("hamming_alloc_256x768", |b| {
+        b.iter(|| batch_hamming_distances(black_box(&query_bits), black_box(&codes_bit_refs)));
+    });
+    group.bench_function("hamming_into_256x768", |b| {
+        let mut out = Vec::with_capacity(n);
+        b.iter(|| {
+            batch_hamming_distances_into(
+                black_box(&query_bits),
+                black_box(&codes_bit_refs),
+                black_box(&mut out),
+            );
+        });
+    });
+    group.bench_function("asymmetric_l2_alloc_256x768", |b| {
+        b.iter(|| batch_asymmetric_l2(black_box(&query), black_box(&codes_l2_refs)).unwrap());
+    });
+    group.bench_function("asymmetric_l2_into_256x768", |b| {
+        let mut out = Vec::with_capacity(n);
+        b.iter(|| {
+            batch_asymmetric_l2_into(
+                black_box(&query),
+                black_box(&codes_l2_refs),
+                black_box(&mut out),
+            )
+            .unwrap();
+        });
+    });
     group.finish();
 }
 
@@ -234,6 +292,14 @@ fn bench_adaptive(c: &mut Criterion) {
     group.bench_function("asymmetric_distances_64x128", |b| {
         b.iter(|| packed.asymmetric_distances(black_box(&query)).unwrap());
     });
+    group.bench_function("asymmetric_distances_into_64x128", |b| {
+        let mut out = Vec::with_capacity(n);
+        b.iter(|| {
+            packed
+                .asymmetric_distances_into(black_box(&query), black_box(&mut out))
+                .unwrap();
+        });
+    });
     group.finish();
 }
 
@@ -245,6 +311,7 @@ fn base_benches(c: &mut Criterion) {
     bench_pack_binary(c);
     bench_unpack_binary(c);
     bench_hamming_distance(c);
+    bench_batch_distance_reuse(c);
     #[cfg(feature = "rabitq")]
     bench_rabitq(c);
     #[cfg(feature = "ternary")]

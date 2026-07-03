@@ -12,10 +12,11 @@ fn main() -> qntz::Result<()> {
     println!("dataset: {N_DOCS} docs, dim={DIM}, top-{TOP_K}");
     println!("bits  recall@10  mean distance relative error  stored code bytes/doc");
 
+    let mut distances = Vec::with_capacity(N_DOCS);
     for bits in [2u8, 4, 8] {
         let quantizer = AdaptiveQuantizer::new(bits)?;
         let batch = quantizer.quantize_packed(&docs)?;
-        let distances = batch.asymmetric_distances(&query)?;
+        batch.asymmetric_distances_into(&query, &mut distances)?;
         let approx = top_k_from_distances(&distances, TOP_K);
 
         let recall = recall_at_k(&exact, &approx);

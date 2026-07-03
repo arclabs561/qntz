@@ -53,6 +53,8 @@ qntz = { version = "0.2", features = ["rabitq", "ternary"] }
 Fallible operations return `qntz::Result<T>` (wrapping `VQuantError`) for
 dimension mismatches and invalid configs. Pure distance helpers that take
 pre-validated inputs return scalar values directly.
+Batch scan helpers expose `_into` variants for reusing caller-owned output
+buffers across repeated queries.
 
 ## Examples
 

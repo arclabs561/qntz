@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- `simd_ops::batch_hamming_distances_into`,
+  `simd_ops::batch_asymmetric_l2_into`, and
+  `adaptive::PackedBatch::asymmetric_distances_into` let repeated scan loops
+  reuse caller-provided output buffers instead of allocating a new distance
+  vector per query.
+
 ### Changed
 - Bumped the optional `innr` dependency (behind the `simd` feature) to 0.6.
   Recorded retroactively: the bump shipped without a changelog entry (the

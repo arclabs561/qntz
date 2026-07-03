@@ -294,7 +294,20 @@ pub fn asymmetric_l2_squared(query: &[f32], codes: &[u8]) -> crate::Result<f32> 
 #[inline]
 #[must_use]
 pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
-    codes.iter().map(|c| hamming_distance(query, c)).collect()
+    let mut distances = Vec::with_capacity(codes.len());
+    batch_hamming_distances_into(query, codes, &mut distances);
+    distances
+}
+
+/// Batch Hamming distances from `query` to each element in `codes`, reusing
+/// `distances` across repeated scans.
+///
+/// Clears `distances` before writing one `u32` per element.
+#[inline]
+pub fn batch_hamming_distances_into(query: &[u8], codes: &[&[u8]], distances: &mut Vec<u32>) {
+    distances.clear();
+    distances.reserve(codes.len());
+    distances.extend(codes.iter().map(|c| hamming_distance(query, c)));
 }
 
 /// Batch asymmetric L2 squared distances from `query` to each element in `codes`.
@@ -305,10 +318,42 @@ pub fn batch_hamming_distances(query: &[u8], codes: &[&[u8]]) -> Vec<u32> {
 /// codes buffer is too small for the query dimension.
 #[inline]
 pub fn batch_asymmetric_l2(query: &[f32], codes: &[&[u8]]) -> crate::Result<Vec<f32>> {
-    codes
-        .iter()
-        .map(|c| asymmetric_l2_squared(query, c))
-        .collect()
+    let mut distances = Vec::with_capacity(codes.len());
+    batch_asymmetric_l2_into(query, codes, &mut distances)?;
+    Ok(distances)
+}
+
+/// Batch asymmetric L2 squared distances from `query` to each element in
+/// `codes`, reusing `distances` across repeated scans.
+///
+/// Clears `distances` before writing one `f32` per element.
+///
+/// # Errors
+///
+/// Returns the first [`VQuantError::DimensionMismatch`] encountered if any
+/// codes buffer is too small for the query dimension.
+#[inline]
+pub fn batch_asymmetric_l2_into(
+    query: &[f32],
+    codes: &[&[u8]],
+    distances: &mut Vec<f32>,
+) -> crate::Result<()> {
+    let required = query.len().div_ceil(8);
+    for code in codes {
+        if code.len() < required {
+            return Err(VQuantError::DimensionMismatch {
+                expected: required,
+                got: code.len(),
+            });
+        }
+    }
+
+    distances.clear();
+    distances.reserve(codes.len());
+    for code in codes {
+        distances.push(asymmetric_l2_squared(query, code)?);
+    }
+    Ok(())
 }
 
 /// Pack extended codes (`ex_bits` per element) into a bitfield.
@@ -453,6 +498,15 @@ mod tests {
 
         let distances = batch_hamming_distances(&query, &codes);
         assert_eq!(distances, vec![0, 4, 8]);
+
+        let mut into = Vec::with_capacity(8);
+        let capacity = into.capacity();
+        batch_hamming_distances_into(&query, &codes, &mut into);
+        assert_eq!(into, distances);
+        assert!(
+            into.capacity() >= capacity,
+            "caller-provided allocation should be reused"
+        );
     }
 
     #[test]
@@ -532,6 +586,25 @@ mod tests {
         let query = vec![1.0f32; 16];
         let codes = vec![0xFFu8; 1];
         assert!(asymmetric_l2_squared(&query, &codes).is_err());
+    }
+
+    #[test]
+    fn batch_asymmetric_l2_into_matches_allocating() {
+        let query = vec![1.0f32; 8];
+        let a = vec![0b11111111];
+        let b = vec![0b00000000];
+        let codes: Vec<&[u8]> = vec![&a, &b];
+
+        let distances = batch_asymmetric_l2(&query, &codes).unwrap();
+        let mut into = Vec::with_capacity(8);
+        let capacity = into.capacity();
+        batch_asymmetric_l2_into(&query, &codes, &mut into).unwrap();
+
+        assert_eq!(into, distances);
+        assert!(
+            into.capacity() >= capacity,
+            "caller-provided allocation should be reused"
+        );
     }
 
     #[test]
