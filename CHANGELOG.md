@@ -15,6 +15,8 @@
 - Bumped the optional `innr` dependency (behind the `simd` feature) to 0.6.
   Recorded retroactively: the bump shipped without a changelog entry (the
   last recorded innr version was 0.4, in 0.1.9).
+- Changed adaptive packed scan plans to use `innr`'s mixed f32/u8 dot primitive
+  when the `simd` feature is enabled.
 
 ## [0.2.0] - 2026-06-24
 

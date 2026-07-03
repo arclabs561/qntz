@@ -480,11 +480,7 @@ impl PackedBatchScanPlan<'_> {
 
             let codes_start = i * dim;
             let codes = &self.batch.codes[codes_start..codes_start + dim];
-            let mixed: f32 = query
-                .iter()
-                .zip(codes.iter())
-                .map(|(&q, &c)| q * c as f32)
-                .sum();
+            let mixed = mixed_dot_f32_u8(query, codes);
 
             let step_f64 = f64::from(step);
             let offset_f64 = f64::from(offset_f32);
@@ -525,6 +521,22 @@ fn adaptive_distance_direct(query: &[f32], codes: &[u8], step: f32, offset: f32)
             diff * diff
         })
         .sum()
+}
+
+#[inline]
+fn mixed_dot_f32_u8(query: &[f32], codes: &[u8]) -> f32 {
+    #[cfg(feature = "simd")]
+    {
+        innr::scalar::mixed_dot_u8_f32(query, codes)
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        query
+            .iter()
+            .zip(codes.iter())
+            .map(|(&q, &c)| q * c as f32)
+            .sum()
+    }
 }
 
 #[cfg(test)]
