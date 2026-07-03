@@ -347,6 +347,39 @@ impl PackedBatch {
         Ok(())
     }
 
+    /// Build a reusable scan plan for repeated query scans over this batch.
+    ///
+    /// The plan precomputes per-vector code sums and squared-code sums. Query
+    /// scans can then use the expanded L2 formula and only compute the
+    /// query-by-code inner product per vector.
+    #[must_use]
+    pub fn scan_plan(&self) -> PackedBatchScanPlan<'_> {
+        let n = self.len();
+        let dim = self.dim;
+        let mut code_sums = Vec::with_capacity(n);
+        let mut code_sq_sums = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let codes_start = i * dim;
+            let codes = &self.codes[codes_start..codes_start + dim];
+            let mut code_sum = 0.0f64;
+            let mut code_sq_sum = 0.0f64;
+            for &code in codes {
+                let code = f64::from(code);
+                code_sum += code;
+                code_sq_sum += code * code;
+            }
+            code_sums.push(code_sum);
+            code_sq_sums.push(code_sq_sum);
+        }
+
+        PackedBatchScanPlan {
+            batch: self,
+            code_sums,
+            code_sq_sums,
+        }
+    }
+
     /// Dequantize a single vector from the batch by index.
     ///
     /// Returns `None` if `index >= len()`.
@@ -366,6 +399,132 @@ impl PackedBatch {
             .collect();
         Some(vec)
     }
+}
+
+/// Reusable scan metadata for a [`PackedBatch`].
+///
+/// Build with [`PackedBatch::scan_plan`] when scanning the same packed batch
+/// against many queries. One-off scans should keep using
+/// [`PackedBatch::asymmetric_distances`] or
+/// [`PackedBatch::asymmetric_distances_into`].
+#[derive(Clone, Debug)]
+pub struct PackedBatchScanPlan<'a> {
+    batch: &'a PackedBatch,
+    code_sums: Vec<f64>,
+    code_sq_sums: Vec<f64>,
+}
+
+impl PackedBatchScanPlan<'_> {
+    /// Number of vectors in the planned batch.
+    pub fn len(&self) -> usize {
+        self.batch.len()
+    }
+
+    /// Whether the planned batch is empty.
+    pub fn is_empty(&self) -> bool {
+        self.batch.is_empty()
+    }
+
+    /// Compute asymmetric L2 squared distances from a query to all vectors.
+    ///
+    /// Returns one distance per vector. The query must have the same
+    /// dimensionality as the stored vectors.
+    pub fn asymmetric_distances(&self, query: &[f32]) -> Result<Vec<f32>> {
+        let mut distances = Vec::with_capacity(self.len());
+        self.asymmetric_distances_into(query, &mut distances)?;
+        Ok(distances)
+    }
+
+    /// Compute asymmetric L2 squared distances into `distances`, reusing its
+    /// allocation across repeated scans.
+    ///
+    /// Clears `distances` before writing one value per vector. The query must
+    /// have the same dimensionality as the stored vectors.
+    pub fn asymmetric_distances_into(&self, query: &[f32], distances: &mut Vec<f32>) -> Result<()> {
+        if !self.is_empty() && query.len() != self.batch.dim {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.batch.dim,
+                got: query.len(),
+            });
+        }
+
+        let n = self.len();
+        distances.clear();
+        distances.reserve(n);
+        if n == 0 {
+            return Ok(());
+        }
+
+        let dim = self.batch.dim;
+        let max_code = ((1u32 << self.batch.bits) - 1) as f32;
+        let mut query_sum = 0.0f32;
+        let mut query_norm_sq = 0.0f32;
+        let mut query_sum_f64 = 0.0f64;
+        let mut query_norm_sq_f64 = 0.0f64;
+        for &q in query {
+            query_sum += q;
+            query_norm_sq += q * q;
+            let q = f64::from(q);
+            query_sum_f64 += q;
+            query_norm_sq_f64 += q * q;
+        }
+
+        for i in 0..n {
+            let scale_f32 = self.batch.scales[i];
+            let offset_f32 = self.batch.offsets[i];
+            let step = if scale_f32 == 0.0 {
+                0.0
+            } else {
+                scale_f32 / max_code
+            };
+
+            let codes_start = i * dim;
+            let codes = &self.batch.codes[codes_start..codes_start + dim];
+            let mixed: f32 = query
+                .iter()
+                .zip(codes.iter())
+                .map(|(&q, &c)| q * c as f32)
+                .sum();
+
+            let step_f64 = f64::from(step);
+            let offset_f64 = f64::from(offset_f32);
+            let cross = step_f64 * f64::from(mixed) + offset_f64 * query_sum_f64;
+            let recon_norm_sq = step_f64 * step_f64 * self.code_sq_sums[i]
+                + 2.0 * step_f64 * offset_f64 * self.code_sums[i]
+                + dim as f64 * offset_f64 * offset_f64;
+            let cancellation_scale =
+                query_norm_sq_f64.abs() + (2.0 * cross).abs() + recon_norm_sq.abs();
+            let cancellation_floor = cancellation_scale * f64::from(f32::EPSILON) * 8.0;
+
+            let dist = query_norm_sq - 2.0 * step * mixed - 2.0 * offset_f32 * query_sum
+                + step * step * self.code_sq_sums[i] as f32
+                + 2.0 * step * offset_f32 * self.code_sums[i] as f32
+                + dim as f32 * offset_f32 * offset_f32;
+
+            // Expanded L2 is faster for embedding-scale values, but large
+            // common offsets can cancel enough high-order bits to diverge from
+            // the direct f32 reconstruction loop.
+            if f64::from(dist) <= cancellation_floor {
+                distances.push(adaptive_distance_direct(query, codes, step, offset_f32));
+            } else {
+                distances.push(dist.max(0.0));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn adaptive_distance_direct(query: &[f32], codes: &[u8], step: f32, offset: f32) -> f32 {
+    query
+        .iter()
+        .zip(codes.iter())
+        .map(|(&q, &c)| {
+            let recon = (c as f32) * step + offset;
+            let diff = q - recon;
+            diff * diff
+        })
+        .sum()
 }
 
 #[cfg(test)]
@@ -616,6 +775,90 @@ mod tests {
             out.capacity() >= capacity,
             "caller-provided capacity should be reused"
         );
+    }
+
+    #[test]
+    fn test_packed_scan_plan_matches_direct_scan() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.07 - 1.0).collect();
+        let docs: Vec<Vec<f32>> = (0..7)
+            .map(|j| (0..32).map(|i| (i as f32 + j as f32) * 0.1 - 0.5).collect())
+            .collect();
+
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let plan = packed.scan_plan();
+        let expected = packed.asymmetric_distances(&query).unwrap();
+        let planned = plan.asymmetric_distances(&query).unwrap();
+
+        assert_eq!(plan.len(), packed.len());
+        assert_eq!(planned.len(), expected.len());
+        for (i, (&got, &want)) in planned.iter().zip(expected.iter()).enumerate() {
+            let abs_diff = (got - want).abs();
+            let rel_diff = abs_diff / (want.abs() + 1e-12);
+            assert!(
+                rel_diff < 1e-5 || abs_diff < 1e-5,
+                "planned distance mismatch at vector {i}: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_packed_scan_plan_matches_direct_scan_with_large_offset() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let base = 1_000_000.0f32;
+        let query: Vec<f32> = (0..32).map(|i| base + (i as f32) * 0.07).collect();
+        let docs: Vec<Vec<f32>> = (0..7)
+            .map(|j| {
+                (0..32)
+                    .map(|i| base + (i as f32) * 0.1 + (j as f32) * 0.03)
+                    .collect()
+            })
+            .collect();
+
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let plan = packed.scan_plan();
+        let expected = packed.asymmetric_distances(&query).unwrap();
+        let planned = plan.asymmetric_distances(&query).unwrap();
+
+        for (i, (&got, &want)) in planned.iter().zip(expected.iter()).enumerate() {
+            let abs_diff = (got - want).abs();
+            let rel_diff = abs_diff / (want.abs() + 1e-12);
+            assert!(
+                rel_diff < 1e-4 || abs_diff < 1e-3,
+                "large-offset planned distance mismatch at vector {i}: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_packed_scan_plan_into_reuses_capacity() {
+        let quantizer = AdaptiveQuantizer::new(8).unwrap();
+        let query: Vec<f32> = (0..32).map(|i| (i as f32) * 0.07 - 1.0).collect();
+        let docs: Vec<Vec<f32>> = (0..5)
+            .map(|j| (0..32).map(|i| (i as f32 + j as f32) * 0.1 - 0.5).collect())
+            .collect();
+
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let plan = packed.scan_plan();
+        let mut out = Vec::with_capacity(16);
+        let capacity = out.capacity();
+        plan.asymmetric_distances_into(&query, &mut out).unwrap();
+
+        assert_eq!(out.len(), packed.len());
+        assert!(
+            out.capacity() >= capacity,
+            "caller-provided capacity should be reused"
+        );
+    }
+
+    #[test]
+    fn test_packed_scan_plan_dimension_mismatch() {
+        let quantizer = AdaptiveQuantizer::new(4).unwrap();
+        let docs = vec![vec![1.0, 2.0, 3.0]];
+        let packed = quantizer.quantize_packed(&docs).unwrap();
+        let plan = packed.scan_plan();
+        let wrong_query = vec![1.0, 2.0];
+        assert!(plan.asymmetric_distances(&wrong_query).is_err());
     }
 
     #[test]

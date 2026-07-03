@@ -8,6 +8,8 @@
   `adaptive::PackedBatch::asymmetric_distances_into` let repeated scan loops
   reuse caller-provided output buffers instead of allocating a new distance
   vector per query.
+- `adaptive::PackedBatch::scan_plan` and `PackedBatchScanPlan` cache per-vector
+  code statistics for repeated adaptive scans over the same packed batch.
 
 ### Changed
 - Bumped the optional `innr` dependency (behind the `simd` feature) to 0.6.

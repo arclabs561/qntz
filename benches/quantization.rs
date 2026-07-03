@@ -300,6 +300,17 @@ fn bench_adaptive(c: &mut Criterion) {
                 .unwrap();
         });
     });
+    group.bench_function("scan_plan_64x128", |b| {
+        b.iter(|| packed.scan_plan());
+    });
+    group.bench_function("scan_plan_distances_into_64x128", |b| {
+        let plan = packed.scan_plan();
+        let mut out = Vec::with_capacity(n);
+        b.iter(|| {
+            plan.asymmetric_distances_into(black_box(&query), black_box(&mut out))
+                .unwrap();
+        });
+    });
     group.finish();
 }
 
