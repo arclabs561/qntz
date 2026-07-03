@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-03
+
 ### Added
 - `simd_ops::batch_hamming_distances_into`,
   `simd_ops::batch_asymmetric_l2_into`, and
