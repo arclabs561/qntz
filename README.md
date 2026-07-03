@@ -91,7 +91,7 @@ assert_eq!(hamming_distance(&packed, &other), 4); // 4 bits differ
 
 ### `rabitq` (feature = "rabitq")
 
-RaBitQ quantizer with configurable bit depth (1--8 bits per dimension).
+RaBitQ quantizer with configurable bit depth (1-8 bits per dimension).
 Supports centroid fitting and approximate L2 distance:
 
 ```rust
