@@ -573,7 +573,7 @@ fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> Option<usize> {
 
 #[pymodule]
 fn qntz(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("__version__", "0.1.2")?;
+    m.add("__version__", "0.1.3")?;
 
     // simd_ops
     m.add_function(wrap_pyfunction!(pack_binary, m)?)?;
