@@ -67,7 +67,10 @@ fn extract_training_data(
 ///
 /// Returns the packed bytes as a numpy uint8 array.
 #[pyfunction]
-fn pack_binary<'py>(py: Python<'py>, codes: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<u8>>> {
+fn pack_binary<'py>(
+    py: Python<'py>,
+    codes: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<u8>>> {
     let codes = extract_u8_vec(codes)?;
     let required = codes.len().div_ceil(8);
     let mut packed = vec![0u8; required];
@@ -109,10 +112,7 @@ fn hamming_distance(a: &Bound<'_, PyAny>, b: &Bound<'_, PyAny>) -> PyResult<u32>
 /// `query` accepts a list of floats or a numpy float32 array.
 /// `codes` accepts a list of ints, bytes, or a numpy uint8 array.
 #[pyfunction]
-fn asymmetric_inner_product(
-    query: &Bound<'_, PyAny>,
-    codes: &Bound<'_, PyAny>,
-) -> PyResult<f32> {
+fn asymmetric_inner_product(query: &Bound<'_, PyAny>, codes: &Bound<'_, PyAny>) -> PyResult<f32> {
     let query = extract_f32_vec(query)?;
     let codes = extract_u8_vec(codes)?;
     qntz_core::simd_ops::asymmetric_inner_product(&query, &codes)
@@ -133,9 +133,15 @@ fn asymmetric_l2_squared(query: &Bound<'_, PyAny>, codes: &Bound<'_, PyAny>) -> 
 
 /// Multi-bit inner product with centered codes.
 #[pyfunction]
-fn multibit_inner_product(query: &Bound<'_, PyAny>, codes: Vec<u16>, total_bits: usize) -> PyResult<f32> {
+fn multibit_inner_product(
+    query: &Bound<'_, PyAny>,
+    codes: Vec<u16>,
+    total_bits: usize,
+) -> PyResult<f32> {
     let query = extract_f32_vec(query)?;
-    Ok(qntz_core::simd_ops::multibit_inner_product(&query, &codes, total_bits))
+    Ok(qntz_core::simd_ops::multibit_inner_product(
+        &query, &codes, total_bits,
+    ))
 }
 
 /// Batch Hamming distances from a query to each element in a list of codes.
@@ -309,11 +315,7 @@ impl RaBitQQuantizer {
     ///   - A flat list or 1D numpy array of floats (row-major) with an
     ///     explicit `num_vectors` parameter.
     #[pyo3(signature = (vectors, num_vectors=None))]
-    fn fit(
-        &mut self,
-        vectors: &Bound<'_, PyAny>,
-        num_vectors: Option<usize>,
-    ) -> PyResult<()> {
+    fn fit(&mut self, vectors: &Bound<'_, PyAny>, num_vectors: Option<usize>) -> PyResult<()> {
         let (flat, nv) = extract_training_data(vectors, num_vectors)?;
         self.inner
             .fit(&flat, nv)
@@ -418,9 +420,11 @@ impl TernaryVector {
     /// Get the ternary value at index (returns -1, 0, or +1).
     fn get(&self, idx: usize) -> PyResult<i8> {
         if idx >= self.inner.dimension() {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("index {} out of range for dimension {}", idx, self.inner.dimension())
-            ));
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "index {} out of range for dimension {}",
+                idx,
+                self.inner.dimension()
+            )));
         }
         Ok(self.inner.get(idx))
     }
@@ -489,11 +493,7 @@ impl TernaryQuantizer {
     ///   - A flat list or 1D numpy array of floats (row-major) with an
     ///     explicit `num_vectors` parameter.
     #[pyo3(signature = (vectors, num_vectors=None))]
-    fn fit(
-        &mut self,
-        vectors: &Bound<'_, PyAny>,
-        num_vectors: Option<usize>,
-    ) -> PyResult<()> {
+    fn fit(&mut self, vectors: &Bound<'_, PyAny>, num_vectors: Option<usize>) -> PyResult<()> {
         let (flat, nv) = extract_training_data(vectors, num_vectors)?;
         self.inner
             .fit(&flat, nv)
@@ -573,7 +573,7 @@ fn ternary_hamming(a: &TernaryVector, b: &TernaryVector) -> Option<usize> {
 
 #[pymodule]
 fn qntz(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("__version__", "0.1.1")?;
+    m.add("__version__", "0.1.2")?;
 
     // simd_ops
     m.add_function(wrap_pyfunction!(pack_binary, m)?)?;
