@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Updated the `entropy_coded_quantization` example to use `ans 0.4`.
+
 ## [0.2.1] - 2026-07-03
 
 ### Added
