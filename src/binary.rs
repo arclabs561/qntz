@@ -57,7 +57,8 @@ impl BinaryQuantizer {
     ///
     /// `projected_dim` may be less than `dim` to simultaneously reduce
     /// dimensionality. When `projected_dim == dim` the full square rotation
-    /// is used.
+    /// is used. A seed is repeatable within a crate version; serialize the
+    /// quantizer when the exact matrix must survive upgrades.
     ///
     /// # Panics
     ///

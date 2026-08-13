@@ -189,6 +189,9 @@ impl RaBitQQuantizer {
     }
 
     /// Create quantizer with specific config.
+    ///
+    /// A seed is repeatable within a crate version. With the `serde` feature,
+    /// serialize the quantizer when the exact rotation must survive upgrades.
     pub fn with_config(dimension: usize, seed: u64, config: RaBitQConfig) -> crate::Result<Self> {
         if dimension == 0 {
             return Err(VQuantError::InvalidConfig {
