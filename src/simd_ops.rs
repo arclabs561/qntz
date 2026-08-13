@@ -364,25 +364,55 @@ pub fn batch_asymmetric_l2_into(
 /// # Buffer requirements
 ///
 /// `packed.len()` must be at least `(codes.len() * ex_bits).div_ceil(8)`.
-/// Bits beyond the buffer length are silently dropped.
+/// Invalid inputs leave `packed` unchanged. For validation, prefer
+/// [`try_pack_extended_interleaved`].
 #[inline]
 pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usize) {
+    let _ = try_pack_extended_interleaved(codes, packed, ex_bits);
+}
+
+/// Checked form of [`pack_extended_interleaved`].
+///
+/// The bytes occupied by the encoded values are overwritten, so a destination
+/// buffer can be reused without retaining bits from an earlier encoding.
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] when `ex_bits > 16`, or
+/// [`VQuantError::DimensionMismatch`] when `packed` is too small.
+#[inline]
+pub fn try_pack_extended_interleaved(
+    codes: &[u16],
+    packed: &mut [u8],
+    ex_bits: usize,
+) -> crate::Result<()> {
+    validate_extended_bits(ex_bits)?;
+    let required = required_extended_bytes(codes.len(), ex_bits)?;
+    if packed.len() < required {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required,
+            got: packed.len(),
+        });
+    }
+    packed[..required].fill(0);
     if ex_bits == 0 {
-        return;
+        return Ok(());
     }
 
+    let mask = extended_mask(ex_bits);
     let mut bit_pos = 0;
     for &code in codes {
-        let val = code & ((1 << ex_bits) - 1);
+        let val = code & mask;
         for b in 0..ex_bits {
             let byte_idx = bit_pos / 8;
             let bit_idx = bit_pos % 8;
-            if byte_idx < packed.len() && (val >> b) & 1 != 0 {
+            if (val >> b) & 1 != 0 {
                 packed[byte_idx] |= 1 << bit_idx;
             }
             bit_pos += 1;
         }
     }
+    Ok(())
 }
 
 /// Unpack extended codes from a bitfield.
@@ -395,12 +425,43 @@ pub fn pack_extended_interleaved(codes: &[u16], packed: &mut [u8], ex_bits: usiz
 /// - `packed.len()` must be at least `(dim * ex_bits).div_ceil(8)`.
 /// - `codes.len()` must be at least `dim`.
 ///
-/// Bits beyond the packed buffer are read as zero.
+/// Invalid inputs leave `codes` unchanged. For validation, prefer
+/// [`try_unpack_extended_interleaved`].
 #[inline]
 pub fn unpack_extended_interleaved(packed: &[u8], codes: &mut [u16], dim: usize, ex_bits: usize) {
+    let _ = try_unpack_extended_interleaved(packed, codes, dim, ex_bits);
+}
+
+/// Checked form of [`unpack_extended_interleaved`].
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] when `ex_bits > 16`, or
+/// [`VQuantError::DimensionMismatch`] when either buffer is too small.
+#[inline]
+pub fn try_unpack_extended_interleaved(
+    packed: &[u8],
+    codes: &mut [u16],
+    dim: usize,
+    ex_bits: usize,
+) -> crate::Result<()> {
+    validate_extended_bits(ex_bits)?;
+    if codes.len() < dim {
+        return Err(VQuantError::DimensionMismatch {
+            expected: dim,
+            got: codes.len(),
+        });
+    }
+    let required = required_extended_bytes(dim, ex_bits)?;
+    if packed.len() < required {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required,
+            got: packed.len(),
+        });
+    }
     if ex_bits == 0 {
-        codes.iter_mut().for_each(|c| *c = 0);
-        return;
+        codes[..dim].fill(0);
+        return Ok(());
     }
 
     let mut bit_pos = 0;
@@ -409,28 +470,78 @@ pub fn unpack_extended_interleaved(packed: &[u8], codes: &mut [u16], dim: usize,
         for b in 0..ex_bits {
             let byte_idx = bit_pos / 8;
             let bit_idx = bit_pos % 8;
-            if byte_idx < packed.len() && (packed[byte_idx] >> bit_idx) & 1 != 0 {
+            if (packed[byte_idx] >> bit_idx) & 1 != 0 {
                 val |= 1 << b;
             }
             bit_pos += 1;
         }
         *code = val;
     }
+    Ok(())
+}
+
+fn validate_extended_bits(ex_bits: usize) -> crate::Result<()> {
+    if ex_bits > u16::BITS as usize {
+        return Err(VQuantError::InvalidConfig {
+            field: "ex_bits",
+            reason: "ex_bits must be in 0..=16 for u16 codes",
+        });
+    }
+    Ok(())
+}
+
+fn extended_mask(ex_bits: usize) -> u16 {
+    if ex_bits == u16::BITS as usize {
+        u16::MAX
+    } else {
+        (1u16 << ex_bits) - 1
+    }
+}
+
+fn required_extended_bytes(dim: usize, ex_bits: usize) -> crate::Result<usize> {
+    dim.checked_mul(ex_bits)
+        .map(|bits| bits.div_ceil(8))
+        .ok_or(VQuantError::InvalidConfig {
+            field: "dim",
+            reason: "encoded bit length overflows usize",
+        })
 }
 
 /// Inner product with multi-bit quantized codes.
 ///
 /// Each code is centered at `(2^bits - 1) / 2`, so code 0 maps to `-center`
 /// and the max code maps to `+center`.
+/// Returns NaN for an invalid bit width; use [`try_multibit_inner_product`] to
+/// handle invalid configuration explicitly.
 #[inline]
 #[must_use]
 pub fn multibit_inner_product(query: &[f32], codes: &[u16], total_bits: usize) -> f32 {
-    let center = ((1 << total_bits) as f32 - 1.0) / 2.0;
-    query
+    try_multibit_inner_product(query, codes, total_bits).unwrap_or(f32::NAN)
+}
+
+/// Checked form of [`multibit_inner_product`].
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] unless `total_bits` is in `1..=16`.
+#[inline]
+pub fn try_multibit_inner_product(
+    query: &[f32],
+    codes: &[u16],
+    total_bits: usize,
+) -> crate::Result<f32> {
+    if !(1..=u16::BITS as usize).contains(&total_bits) {
+        return Err(VQuantError::InvalidConfig {
+            field: "total_bits",
+            reason: "total_bits must be in 1..=16 for u16 codes",
+        });
+    }
+    let center = ((1u32 << total_bits) as f32 - 1.0) / 2.0;
+    Ok(query
         .iter()
         .zip(codes.iter())
         .map(|(q, &c)| q * (c as f32 - center))
-        .sum()
+        .sum())
 }
 
 #[cfg(test)]
@@ -489,6 +600,66 @@ mod tests {
         unpack_extended_interleaved(&packed, &mut unpacked, codes.len(), ex_bits);
 
         assert_eq!(codes, unpacked);
+    }
+
+    #[test]
+    fn checked_extended_roundtrip_matches_independent_bitstream_oracle() {
+        for ex_bits in 0..=16 {
+            let mask = extended_mask(ex_bits);
+            let codes: Vec<u16> = (0..73)
+                .map(|i| match i % 4 {
+                    0 => 0,
+                    1 => mask,
+                    2 => mask / 2,
+                    _ => (i as u16).wrapping_mul(40503) & mask,
+                })
+                .collect();
+            let mut packed = vec![0xa5; required_extended_bytes(codes.len(), ex_bits).unwrap()];
+            try_pack_extended_interleaved(&codes, &mut packed, ex_bits).unwrap();
+
+            for (i, &expected) in codes.iter().enumerate() {
+                let mut oracle = 0u16;
+                for bit in 0..ex_bits {
+                    let absolute = i * ex_bits + bit;
+                    let set = (packed[absolute / 8] >> (absolute % 8)) & 1;
+                    oracle |= u16::from(set) << bit;
+                }
+                assert_eq!(
+                    oracle, expected,
+                    "independent decode failed at width {ex_bits}"
+                );
+            }
+
+            let mut decoded = vec![u16::MAX; codes.len()];
+            try_unpack_extended_interleaved(&packed, &mut decoded, codes.len(), ex_bits).unwrap();
+            assert_eq!(decoded, codes);
+        }
+    }
+
+    #[test]
+    fn checked_extended_pack_overwrites_reused_destination() {
+        let mut packed = [u8::MAX; 2];
+        try_pack_extended_interleaved(&[0, 0, 0], &mut packed, 3).unwrap();
+        assert_eq!(packed, [0, 0]);
+
+        try_pack_extended_interleaved(&[7, 1, 4], &mut packed, 3).unwrap();
+        let mut decoded = [0u16; 3];
+        try_unpack_extended_interleaved(&packed, &mut decoded, 3, 3).unwrap();
+        assert_eq!(decoded, [7, 1, 4]);
+    }
+
+    #[test]
+    fn checked_extended_operations_reject_invalid_inputs() {
+        let mut byte = [0u8; 1];
+        let mut code = [0u16; 1];
+        assert!(try_pack_extended_interleaved(&[1], &mut [], 1).is_err());
+        assert!(try_unpack_extended_interleaved(&[], &mut code, 1, 1).is_err());
+        assert!(try_unpack_extended_interleaved(&byte, &mut [], 1, 1).is_err());
+        assert!(try_pack_extended_interleaved(&[1], &mut byte, 17).is_err());
+        assert!(try_unpack_extended_interleaved(&byte, &mut code, 1, 17).is_err());
+        assert!(required_extended_bytes(usize::MAX, 2).is_err());
+        assert!(try_multibit_inner_product(&[1.0], &[1], 0).is_err());
+        assert!(try_multibit_inner_product(&[1.0], &[1], 17).is_err());
     }
 
     #[test]

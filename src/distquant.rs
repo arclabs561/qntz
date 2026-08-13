@@ -274,14 +274,48 @@ fn nearest_code(value: f64, codebook: &[f64]) -> u32 {
 /// # Returns
 ///
 /// A tuple of `(codes, info)` where codes are indices into the codebook.
+///
+/// # Panics
+///
+/// Panics when `bits` is outside `1..=8` or an explicit `beta` is not positive
+/// and finite. Use [`try_quantize`] to handle invalid configuration.
 pub fn quantize(
     data: &[f64],
     bits: u8,
     dist: Distribution,
     beta: Option<f64>,
 ) -> (Vec<u32>, QuantInfo) {
+    try_quantize(data, bits, dist, beta)
+        .expect("bits must be in 1..=8 and beta must be positive and finite")
+}
+
+/// Checked form of [`quantize`].
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] when `bits` is outside `1..=8` or
+/// an explicit `beta` is not positive and finite.
+pub fn try_quantize(
+    data: &[f64],
+    bits: u8,
+    dist: Distribution,
+    beta: Option<f64>,
+) -> Result<(Vec<u32>, QuantInfo)> {
+    if !(1..=8).contains(&bits) {
+        return Err(VQuantError::InvalidConfig {
+            field: "bits",
+            reason: "bits must be in 1..=8",
+        });
+    }
+    if beta.is_some_and(|value| value <= 0.0 || !value.is_finite()) {
+        return Err(VQuantError::InvalidConfig {
+            field: "beta",
+            reason: "beta must be positive and finite",
+        });
+    }
+
     if data.is_empty() {
-        return (
+        return Ok((
             vec![],
             QuantInfo {
                 codebook: vec![],
@@ -290,7 +324,7 @@ pub fn quantize(
                 bits,
                 dist,
             },
-        );
+        ));
     }
 
     let n_levels = 1usize << bits;
@@ -303,8 +337,7 @@ pub fn quantize(
     // Auto-search beta if not provided
     let beta = beta.unwrap_or_else(|| find_optimal_beta(data, mean, std, n_levels, dist));
 
-    let codebook = build_codebook(n_levels, dist, Some(beta))
-        .expect("valid codebook parameters after validation");
+    let codebook = build_codebook(n_levels, dist, Some(beta))?;
 
     // Quantize: map each standardized value to nearest codebook entry
     let codes: Vec<u32> = data
@@ -315,7 +348,7 @@ pub fn quantize(
         })
         .collect();
 
-    (
+    Ok((
         codes,
         QuantInfo {
             codebook,
@@ -324,7 +357,7 @@ pub fn quantize(
             bits,
             dist,
         },
-    )
+    ))
 }
 
 /// Dequantize codes back to f64 values.
@@ -341,14 +374,26 @@ pub fn dequantize(codes: &[u32], info: &QuantInfo) -> Vec<f64> {
 /// Pack quantized codes into u64 words for compact storage.
 ///
 /// For `k` bits per code, packs `floor(64/k)` codes per u64.
+/// Returns an empty vector for an invalid bit width; use [`try_pack_codes`] to
+/// distinguish invalid configuration from empty input.
 pub fn pack_codes(codes: &[u32], bits: u8) -> Vec<u64> {
-    if codes.is_empty() || bits == 0 {
-        return vec![];
+    try_pack_codes(codes, bits).unwrap_or_default()
+}
+
+/// Checked form of [`pack_codes`].
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] unless `bits` is in `1..=32`.
+pub fn try_pack_codes(codes: &[u32], bits: u8) -> Result<Vec<u64>> {
+    validate_code_bits(bits)?;
+    if codes.is_empty() {
+        return Ok(vec![]);
     }
 
     let codes_per_word = 64 / bits as usize;
     let n_words = codes.len().div_ceil(codes_per_word);
-    let mask = (1u64 << bits) - 1;
+    let mask = (1u64 << u32::from(bits)) - 1;
 
     let mut packed = vec![0u64; n_words];
     for (i, &code) in codes.iter().enumerate() {
@@ -356,27 +401,56 @@ pub fn pack_codes(codes: &[u32], bits: u8) -> Vec<u64> {
         let bit_offset = (i % codes_per_word) * bits as usize;
         packed[word_idx] |= ((code as u64) & mask) << bit_offset;
     }
-    packed
+    Ok(packed)
 }
 
 /// Unpack codes from u64 words.
+///
+/// Returns an empty vector for an invalid width or undersized input; use
+/// [`try_unpack_codes`] to distinguish those cases from empty output.
 pub fn unpack_codes(packed: &[u64], bits: u8, n_codes: usize) -> Vec<u32> {
-    if packed.is_empty() || bits == 0 || n_codes == 0 {
-        return vec![];
+    try_unpack_codes(packed, bits, n_codes).unwrap_or_default()
+}
+
+/// Checked form of [`unpack_codes`].
+///
+/// # Errors
+///
+/// Returns [`VQuantError::InvalidConfig`] unless `bits` is in `1..=32`, or
+/// [`VQuantError::DimensionMismatch`] when `packed` cannot contain `n_codes`.
+pub fn try_unpack_codes(packed: &[u64], bits: u8, n_codes: usize) -> Result<Vec<u32>> {
+    validate_code_bits(bits)?;
+    if n_codes == 0 {
+        return Ok(vec![]);
     }
 
     let codes_per_word = 64 / bits as usize;
-    let mask = (1u64 << bits) - 1;
+    let required = n_codes.div_ceil(codes_per_word);
+    if packed.len() < required {
+        return Err(VQuantError::DimensionMismatch {
+            expected: required,
+            got: packed.len(),
+        });
+    }
+    let mask = (1u64 << u32::from(bits)) - 1;
 
     let mut codes = Vec::with_capacity(n_codes);
     for i in 0..n_codes {
         let word_idx = i / codes_per_word;
         let bit_offset = (i % codes_per_word) * bits as usize;
-        if word_idx < packed.len() {
-            codes.push(((packed[word_idx] >> bit_offset) & mask) as u32);
-        }
+        codes.push(((packed[word_idx] >> bit_offset) & mask) as u32);
     }
-    codes
+    Ok(codes)
+}
+
+fn validate_code_bits(bits: u8) -> Result<()> {
+    if !(1..=32).contains(&bits) {
+        return Err(VQuantError::InvalidConfig {
+            field: "bits",
+            reason: "bits must be in 1..=32 for u32 codes",
+        });
+    }
+    Ok(())
 }
 
 /// Search for the beta that minimizes mean squared reconstruction error.
@@ -844,6 +918,60 @@ mod tests {
         let packed = pack_codes(&codes, 3);
         let unpacked = unpack_codes(&packed, 3, codes.len());
         assert_eq!(codes, unpacked);
+    }
+
+    #[test]
+    fn checked_quantize_rejects_invalid_bits_and_beta() {
+        let data = [0.0, 1.0];
+        for bits in [0, 9, u8::MAX] {
+            assert!(try_quantize(&data, bits, Distribution::Gaussian, None).is_err());
+        }
+        for beta in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(try_quantize(&data, 4, Distribution::Gaussian, Some(beta)).is_err());
+        }
+    }
+
+    #[test]
+    fn checked_code_packing_matches_independent_slot_oracle() {
+        for bits in 1..=32u8 {
+            let max = if bits == 32 {
+                u32::MAX
+            } else {
+                (1u32 << bits) - 1
+            };
+            let codes: Vec<u32> = (0..137)
+                .map(|i| match i % 5 {
+                    0 => 0,
+                    1 => 1,
+                    2 => max,
+                    3 => max / 2,
+                    _ => (i as u32).wrapping_mul(0x9e37_79b9) & max,
+                })
+                .collect();
+            let packed = try_pack_codes(&codes, bits).unwrap();
+
+            let per_word = 64 / bits as usize;
+            for (i, &code) in codes.iter().enumerate() {
+                let mut oracle = 0u32;
+                let base = (i % per_word) * bits as usize;
+                for bit in 0..bits as usize {
+                    let set = (packed[i / per_word] >> (base + bit)) & 1;
+                    oracle |= (set as u32) << bit;
+                }
+                assert_eq!(oracle, code, "independent decode failed at width {bits}");
+            }
+            assert_eq!(try_unpack_codes(&packed, bits, codes.len()).unwrap(), codes);
+        }
+    }
+
+    #[test]
+    fn checked_code_packing_rejects_invalid_widths_and_short_input() {
+        for bits in [0, 33, 64, u8::MAX] {
+            assert!(try_pack_codes(&[1], bits).is_err());
+            assert!(try_unpack_codes(&[1], bits, 1).is_err());
+        }
+        assert!(try_unpack_codes(&[], 4, 1).is_err());
+        assert!(try_unpack_codes(&[0], 4, 17).is_err());
     }
 
     #[test]
