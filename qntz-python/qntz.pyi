@@ -117,7 +117,7 @@ class QuantizedVector:
         ...
     @property
     def f_error(self) -> float:
-        """Quantization error bound."""
+        """Squared-distance error coefficient for a unit query residual."""
         ...
     @property
     def residual_norm(self) -> float:
@@ -175,6 +175,13 @@ class RaBitQQuantizer:
         quantized: QuantizedVector,
     ) -> float:
         """Approximate L2 distance squared between query and quantized vector."""
+        ...
+    def squared_distance_error_margin(
+        self,
+        query: Union[list[float], npt.NDArray[np.float32]],
+        quantized: QuantizedVector,
+    ) -> float:
+        """Return the query-scaled squared-distance error margin."""
         ...
     def approximate_distance(
         self,

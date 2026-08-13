@@ -160,7 +160,11 @@ pub struct QuantizedVector {
     pub f_add: f32,
     /// Multiplicative correction factor for distance
     pub f_rescale: f32,
-    /// Quantization error estimate
+    /// Squared-distance error coefficient for a unit-norm query residual.
+    ///
+    /// This is not a complete error radius for an arbitrary query. Use
+    /// [`RaBitQQuantizer::squared_distance_error_margin`] to include the norm
+    /// of the query residual.
     pub f_error: f32,
     /// L2 norm of residual
     pub residual_norm: f32,
@@ -648,6 +652,46 @@ impl RaBitQQuantizer {
         let q_resid_norm_sqr: f32 = query_residual.iter().map(|x| x * x).sum();
         let dist = q_resid_norm_sqr + quantized.f_add + quantized.f_rescale * ip;
         Ok(dist.max(0.0))
+    }
+
+    /// Error margin associated with [`approximate_l2_sqr`](Self::approximate_l2_sqr).
+    ///
+    /// The stored [`QuantizedVector::f_error`] is the squared-distance error
+    /// coefficient for a unit-norm query residual. This method scales it by
+    /// `||q - c||`, where `c` is the quantizer's centroid, so the result has
+    /// the same units as a squared L2 distance.
+    ///
+    /// The coefficient uses RaBitQ's conventional `epsilon = 1.9`. Its
+    /// probabilistic interpretation assumes a random orthogonal rotation; it
+    /// is an error margin under that model, not a dataset-independent observed
+    /// error guarantee.
+    pub fn squared_distance_error_margin(
+        &self,
+        query: &[f32],
+        quantized: &QuantizedVector,
+    ) -> crate::Result<f32> {
+        if query.len() != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: query.len(),
+            });
+        }
+        if quantized.dimension != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: quantized.dimension,
+            });
+        }
+
+        let query_norm_sqr = match self.centroid.as_deref() {
+            Some(centroid) => query
+                .iter()
+                .zip(centroid)
+                .map(|(q, c)| (q - c) * (q - c))
+                .sum::<f32>(),
+            None => query.iter().map(|q| q * q).sum::<f32>(),
+        };
+        Ok(quantized.f_error * query_norm_sqr.sqrt())
     }
 
     /// Approximate Euclidean distance (L2) between a query and a quantized vector.

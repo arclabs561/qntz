@@ -241,3 +241,90 @@ fn more_bits_should_improve_correlation() {
         avg1
     );
 }
+
+#[test]
+fn error_margin_scales_with_query_residual_norm() {
+    let dim = 32;
+    let mut quantizer = RaBitQQuantizer::binary(dim, 42).unwrap();
+    let centroid = vec![3.0f32; dim];
+    quantizer.set_centroid(centroid.clone()).unwrap();
+    let target: Vec<f32> = centroid
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c + (i as f32 + 1.0).recip())
+        .collect();
+    let quantized = quantizer.quantize(&target).unwrap();
+
+    let zero = quantizer
+        .squared_distance_error_margin(&centroid, &quantized)
+        .unwrap();
+    let query: Vec<f32> = centroid
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c + if i == 0 { 1.0 } else { 0.0 })
+        .collect();
+    let doubled: Vec<f32> = centroid
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c + if i == 0 { 2.0 } else { 0.0 })
+        .collect();
+    let margin = quantizer
+        .squared_distance_error_margin(&query, &quantized)
+        .unwrap();
+    let doubled_margin = quantizer
+        .squared_distance_error_margin(&doubled, &quantized)
+        .unwrap();
+
+    assert_eq!(zero, 0.0);
+    assert!(margin.is_finite() && margin > 0.0);
+    assert!((doubled_margin - 2.0 * margin).abs() <= 1e-6 * margin.max(1.0));
+}
+
+#[test]
+fn binary_error_margin_covers_adversarial_finite_pairs() {
+    let dim = 64;
+    let basis = |index: usize| {
+        let mut vector = vec![0.0f32; dim];
+        vector[index] = 1.0;
+        vector
+    };
+    let dense = normalize(&(0..dim).map(|i| i as f32 + 1.0).collect::<Vec<_>>());
+    let alternating = normalize(
+        &(0..dim)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect::<Vec<_>>(),
+    );
+    let mut spiked = vec![1e-3f32; dim];
+    spiked[0] = 1.0;
+    let spiked = normalize(&spiked);
+    let pairs = [
+        (basis(0), basis(1)),
+        (basis(0), dense.clone()),
+        (alternating, dense),
+        (spiked, basis(dim - 1)),
+    ];
+
+    let mut covered = 0usize;
+    let mut total = 0usize;
+    for seed in 1..=128 {
+        let quantizer = RaBitQQuantizer::binary(dim, seed).unwrap();
+        for (target, query) in &pairs {
+            let code = quantizer.quantize(target).unwrap();
+            let estimate = quantizer.approximate_l2_sqr(query, &code).unwrap();
+            let exact = l2_sqr(query, target);
+            let margin = quantizer
+                .squared_distance_error_margin(query, &code)
+                .unwrap();
+            assert!(estimate.is_finite() && margin.is_finite());
+            covered += usize::from((estimate - exact).abs() <= margin + 1e-6);
+            total += 1;
+        }
+    }
+
+    let coverage = covered as f32 / total as f32;
+    assert!(
+        coverage >= 0.95,
+        "epsilon=1.9 margin covered only {covered}/{total} adversarial pairs ({:.1}%)",
+        coverage * 100.0
+    );
+}

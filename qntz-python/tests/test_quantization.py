@@ -182,6 +182,15 @@ class TestRaBitQ:
         dist = q.approximate_distance([0.5] * dim, qv)
         assert dist >= 0.0
 
+    def test_error_margin_scales_with_query_norm(self):
+        dim = 32
+        q = qntz.RaBitQQuantizer(dim, 42, total_bits=1)
+        qv = q.quantize([math.sin(i) for i in range(dim)])
+        margin = q.squared_distance_error_margin([1.0] + [0.0] * (dim - 1), qv)
+        doubled = q.squared_distance_error_margin([2.0] + [0.0] * (dim - 1), qv)
+        assert margin > 0.0
+        assert doubled == pytest.approx(2.0 * margin)
+
     def test_dimension_zero_rejected(self):
         with pytest.raises(ValueError):
             qntz.RaBitQQuantizer(0, 42)

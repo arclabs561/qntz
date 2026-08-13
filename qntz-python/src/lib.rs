@@ -235,7 +235,7 @@ impl QuantizedVector {
         self.inner.f_rescale
     }
 
-    /// Quantization error bound.
+    /// Squared-distance error coefficient for a unit-norm query residual.
     #[getter]
     fn f_error(&self) -> f32 {
         self.inner.f_error
@@ -275,8 +275,8 @@ impl QuantizedVector {
 
 /// RaBitQ quantizer with extended bit support.
 ///
-/// Quantizes vectors into 1-8 bits per dimension using randomized
-/// Hadamard rotation and uniform scalar quantization.
+/// Quantizes vectors into 1-8 bits per dimension using a random orthogonal
+/// rotation and uniform scalar quantization.
 ///
 /// Args:
 ///     dimension: vector dimension (must be > 0).
@@ -352,6 +352,18 @@ impl RaBitQQuantizer {
         let query = extract_f32_vec(query)?;
         self.inner
             .approximate_l2_sqr(&query, &quantized.inner)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Query-scaled squared-distance error margin.
+    fn squared_distance_error_margin(
+        &self,
+        query: &Bound<'_, PyAny>,
+        quantized: &QuantizedVector,
+    ) -> PyResult<f32> {
+        let query = extract_f32_vec(query)?;
+        self.inner
+            .squared_distance_error_margin(&query, &quantized.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 

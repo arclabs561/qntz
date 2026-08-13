@@ -8,7 +8,8 @@ fn main() -> qntz::Result<()> {
     let flat_docs: Vec<f32> = docs.iter().flat_map(|v| v.iter().copied()).collect();
 
     println!("dataset: {N_DOCS} docs, dim={DIM}");
-    println!("bits  mean relative error proxy  mean residual norm  bytes/code");
+    let query = &docs[0];
+    println!("bits  mean abs squared error  mean error margin  covered  bytes/code");
 
     for bits in [1usize, 2, 4, 8] {
         let config = RaBitQConfig {
@@ -18,25 +19,32 @@ fn main() -> qntz::Result<()> {
         let mut quantizer = RaBitQQuantizer::with_config(DIM, 42, config)?;
         quantizer.fit(&flat_docs, N_DOCS)?;
 
-        let mut rel_error_sum = 0.0f32;
-        let mut residual_sum = 0.0f32;
+        let mut abs_error_sum = 0.0f32;
+        let mut margin_sum = 0.0f32;
+        let mut covered = 0usize;
         let mut bytes_sum = 0usize;
 
         for doc in &docs {
             let qv = quantizer.quantize(doc)?;
-            let denom = (qv.residual_norm * qv.residual_norm).max(1e-6);
-            rel_error_sum += qv.f_error / denom;
-            residual_sum += qv.residual_norm;
+            let exact: f32 = query.iter().zip(doc).map(|(q, d)| (q - d) * (q - d)).sum();
+            let estimate = quantizer.approximate_l2_sqr(query, &qv)?;
+            let margin = quantizer.squared_distance_error_margin(query, &qv)?;
+            let abs_error = (estimate - exact).abs();
+            abs_error_sum += abs_error;
+            margin_sum += margin;
+            covered += usize::from(abs_error <= margin);
             bytes_sum += qv.binary_codes.len() + qv.extended_codes.len();
         }
 
         let n = docs.len() as f32;
-        let mean_rel_error = rel_error_sum / n;
-        let mean_residual = residual_sum / n;
+        let mean_abs_error = abs_error_sum / n;
+        let mean_margin = margin_sum / n;
+        let coverage = covered as f32 / n;
         let bytes_per_code = bytes_sum as f32 / n;
 
         println!(
-            "{bits:>4}  {mean_rel_error:>25.4}  {mean_residual:>18.4}  {bytes_per_code:>10.1}"
+            "{bits:>4}  {mean_abs_error:>22.4}  {mean_margin:>17.4}  {:>6.1}%  {bytes_per_code:>10.1}",
+            coverage * 100.0
         );
     }
 
