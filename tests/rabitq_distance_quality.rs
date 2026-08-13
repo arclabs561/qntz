@@ -304,11 +304,11 @@ fn binary_error_margin_covers_adversarial_finite_pairs() {
         (spiked, basis(dim - 1)),
     ];
 
-    let mut covered = 0usize;
-    let mut total = 0usize;
+    let mut covered = [0usize; 4];
+    let mut total = [0usize; 4];
     for seed in 1..=128 {
         let quantizer = RaBitQQuantizer::binary(dim, seed).unwrap();
-        for (target, query) in &pairs {
+        for (family, (target, query)) in pairs.iter().enumerate() {
             let code = quantizer.quantize(target).unwrap();
             let estimate = quantizer.approximate_l2_sqr(query, &code).unwrap();
             let exact = l2_sqr(query, target);
@@ -316,18 +316,25 @@ fn binary_error_margin_covers_adversarial_finite_pairs() {
                 .squared_distance_error_margin(query, &code)
                 .unwrap();
             assert!(estimate.is_finite() && margin.is_finite());
-            covered += usize::from((estimate - exact).abs() <= margin + 1e-6);
-            total += 1;
+            covered[family] += usize::from((estimate - exact).abs() <= margin + 1e-6);
+            total[family] += 1;
         }
     }
 
-    let coverage = covered as f32 / total as f32;
     // The paper leaves the tail constant unspecified, so epsilon=1.9 does not
     // define a nominal 95% interval. This is a broad regression floor across
     // deliberately non-random vectors, not a confidence calibration claim.
-    assert!(
-        coverage >= 0.90,
-        "epsilon=1.9 margin covered only {covered}/{total} adversarial pairs ({:.1}%)",
-        coverage * 100.0
-    );
+    for (family, name) in ["basis", "dense", "alternating", "spiked"]
+        .into_iter()
+        .enumerate()
+    {
+        let coverage = covered[family] as f32 / total[family] as f32;
+        assert!(
+            coverage >= 0.85,
+            "epsilon=1.9 margin covered only {}/{} {name} pairs ({:.1}%)",
+            covered[family],
+            total[family],
+            coverage * 100.0
+        );
+    }
 }

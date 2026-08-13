@@ -60,6 +60,11 @@ path = "examples/rabitq_error_budget.rs"
 required-features = ["rabitq"]
 
 [[example]]
+name = "rabitq_statistical_eval"
+path = "examples/rabitq_statistical_eval.rs"
+required-features = ["rabitq"]
+
+[[example]]
 name = "adaptive_scan"
 path = "examples/adaptive_scan.rs"
 required-features = ["adaptive"]

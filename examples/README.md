@@ -9,8 +9,8 @@ and exits successfully.
 
 ## `rabitq_error_budget`
 
-Compares RaBitQ bit widths using the quantizer's error proxy and packed code
-size.
+Compares RaBitQ bit widths using observed squared-distance error, the
+query-scaled error margin, empirical coverage, and packed code size.
 
 ```sh
 cargo run --release --features rabitq --example rabitq_error_budget
@@ -20,11 +20,23 @@ Output:
 
 ```text
 dataset: 512 docs, dim=64
-bits  mean relative error proxy  mean residual norm  bytes/code
-   1                     0.0561              6.3110         8.0
-   2                     0.0286              6.3110        16.0
-   4                     0.0091              6.3110        32.0
-   8                     0.0004              6.3110        64.0
+bits  mean abs squared error  mean error margin  covered  bytes/code
+   1                  5.8722            15.2647    94.5%         8.0
+   2                  2.6036             7.7498    98.0%        16.0
+   4                  0.7975             2.4264    97.5%        32.0
+   8                  0.0420             0.1131    95.9%        64.0
+```
+
+## `rabitq_statistical_eval`
+
+Measures the unclamped one-bit estimator across random and adversarial vector
+families. It reports signed bias, RMSE, tail errors, error-margin coverage, and
+rotation orthogonality. The default is a bounded smoke run; `--full` samples
+more dimensions and seeds. This is an on-demand evaluation, not a CI test.
+
+```sh
+cargo run --release --features rabitq --example rabitq_statistical_eval
+cargo run --release --features rabitq --example rabitq_statistical_eval -- --full
 ```
 
 ## `adaptive_scan`
