@@ -62,7 +62,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 2-bit quantization (1 sign + 1 extended). ~75% recall without rerank.
+    /// 2-bit quantization (1 sign + 1 extended).
     #[must_use]
     pub fn bits2() -> Self {
         Self {
@@ -71,7 +71,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 3-bit quantization (1 sign + 2 extended). ~85% recall without rerank.
+    /// 3-bit quantization (1 sign + 2 extended).
     #[must_use]
     pub fn bits3() -> Self {
         Self {
@@ -80,7 +80,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 4-bit quantization (default, good balance). ~90% recall without rerank.
+    /// 4-bit quantization (the default).
     #[must_use]
     pub fn bits4() -> Self {
         Self {
@@ -89,7 +89,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 5-bit quantization. ~95% recall without rerank.
+    /// 5-bit quantization.
     #[must_use]
     pub fn bits5() -> Self {
         Self {
@@ -98,7 +98,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 6-bit quantization. ~97% recall without rerank.
+    /// 6-bit quantization.
     #[must_use]
     pub fn bits6() -> Self {
         Self {
@@ -107,7 +107,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 7-bit quantization. ~99% recall without rerank.
+    /// 7-bit quantization.
     #[must_use]
     pub fn bits7() -> Self {
         Self {
@@ -116,7 +116,7 @@ impl RaBitQConfig {
         }
     }
 
-    /// 8-bit quantization (high accuracy). ~99.5% recall without rerank.
+    /// 8-bit quantization.
     #[must_use]
     pub fn bits8() -> Self {
         Self {
@@ -136,6 +136,23 @@ impl RaBitQConfig {
             None
         };
         Self { t_const, ..self }
+    }
+
+    /// Create a config with a precomputed scaling factor, validating its inputs.
+    pub fn try_with_const_scaling(self, dimension: usize, seed: u64) -> crate::Result<Self> {
+        if dimension == 0 {
+            return Err(VQuantError::InvalidConfig {
+                field: "dimension",
+                reason: "must be > 0",
+            });
+        }
+        if !(1..=8).contains(&self.total_bits) {
+            return Err(VQuantError::InvalidConfig {
+                field: "total_bits",
+                reason: "must be 1-8",
+            });
+        }
+        Ok(self.with_const_scaling(dimension, seed))
     }
 }
 
@@ -205,6 +222,18 @@ impl RaBitQQuantizer {
                 reason: "must be 1-8",
             });
         }
+        if config.t_const.is_some_and(|t| !t.is_finite() || t <= 0.0) {
+            return Err(VQuantError::InvalidConfig {
+                field: "t_const",
+                reason: "must be finite and > 0",
+            });
+        }
+        dimension
+            .checked_mul(dimension)
+            .ok_or(VQuantError::InvalidConfig {
+                field: "dimension",
+                reason: "rotation size overflows usize",
+            })?;
 
         let rotation = generate_orthogonal_rotation(dimension, seed);
 
@@ -223,12 +252,26 @@ impl RaBitQQuantizer {
 
     /// Fit quantizer on training vectors (computes centroid).
     pub fn fit(&mut self, vectors: &[f32], num_vectors: usize) -> crate::Result<()> {
-        if vectors.len() != num_vectors * self.dimension {
+        if num_vectors == 0 {
+            return Err(VQuantError::InvalidConfig {
+                field: "num_vectors",
+                reason: "must be > 0",
+            });
+        }
+        let expected =
+            num_vectors
+                .checked_mul(self.dimension)
+                .ok_or(VQuantError::InvalidConfig {
+                    field: "num_vectors",
+                    reason: "element count overflows usize",
+                })?;
+        if vectors.len() != expected {
             return Err(VQuantError::DimensionMismatch {
-                expected: num_vectors * self.dimension,
+                expected,
                 got: vectors.len(),
             });
         }
+        ensure_finite(vectors, "vectors")?;
 
         let mut centroid = vec![0.0f32; self.dimension];
         for i in 0..num_vectors {
@@ -253,6 +296,7 @@ impl RaBitQQuantizer {
                 got: centroid.len(),
             });
         }
+        ensure_finite(&centroid, "centroid")?;
         self.centroid = Some(centroid);
         Ok(())
     }
@@ -265,6 +309,7 @@ impl RaBitQQuantizer {
                 got: vector.len(),
             });
         }
+        ensure_finite(vector, "vector")?;
 
         let default_centroid = vec![0.0f32; self.dimension];
         let centroid = self.centroid.as_ref().unwrap_or(&default_centroid);
@@ -277,6 +322,20 @@ impl RaBitQQuantizer {
         vector: &[f32],
         centroid: &[f32],
     ) -> crate::Result<QuantizedVector> {
+        if vector.len() != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: vector.len(),
+            });
+        }
+        if centroid.len() != self.dimension {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.dimension,
+                got: centroid.len(),
+            });
+        }
+        ensure_finite(vector, "vector")?;
+        ensure_finite(centroid, "centroid")?;
         let dim = self.dimension;
         let ex_bits = self.config.total_bits.saturating_sub(1);
 
@@ -407,6 +466,8 @@ impl RaBitQQuantizer {
                 got: rotated_residual.len(),
             });
         }
+        ensure_finite(rotated_residual, "rotated_residual")?;
+        ensure_finite(raw_centroid, "raw_centroid")?;
         let ex_bits = self.config.total_bits.saturating_sub(1);
         let rotated = rotated_residual;
 
@@ -557,6 +618,7 @@ impl RaBitQQuantizer {
                 got: query.len(),
             });
         }
+        ensure_finite(query, "query")?;
         let default_centroid = vec![0.0f32; self.dimension];
         let centroid = self.centroid.as_deref().unwrap_or(&default_centroid);
         let residual: Vec<f32> = query
@@ -593,28 +655,27 @@ impl RaBitQQuantizer {
         rotated_query: &[f32],
         quantized: &QuantizedVector,
     ) -> f32 {
-        let cb = -((1 << quantized.ex_bits) as f32 - 0.5);
-        // Two-accumulator reduction: breaks the serial FP dependency chain so
-        // that LLVM can issue two fmadd streams in parallel (latency hiding).
-        let mut ip0 = 0.0f32;
-        let mut ip1 = 0.0f32;
-        let codes = &quantized.codes;
-        let chunks = rotated_query.len() / 2;
-        for i in 0..chunks {
-            let j = i * 2;
-            ip0 += rotated_query[j] * (codes[j] as f32 + cb);
-            ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
+        if !quantized_shape_is_safe(quantized, rotated_query.len()) {
+            return f32::NAN;
         }
-        if rotated_query.len() % 2 != 0 {
-            let last = rotated_query.len() - 1;
-            ip0 += rotated_query[last] * (codes[last] as f32 + cb);
-        }
-        let ip = ip0 + ip1;
-        // Ranking proxy ||q-v||^2 - ||q-c||^2: monotonic in true distance but
-        // legitimately NEGATIVE for near neighbors, so it must NOT be clamped
-        // (clamping collapses the nearest candidates to 0 and loses their order).
-        // For an absolute distance, add ||rotated_query||^2 (= ||q-c||^2) once.
-        quantized.f_add + quantized.f_rescale * ip
+        approximate_l2_sqr_prerotated_unchecked(rotated_query, quantized)
+    }
+
+    /// Checked form of [`approximate_l2_sqr_prerotated`](Self::approximate_l2_sqr_prerotated).
+    ///
+    /// This rejects mismatched or malformed public code values instead of
+    /// indexing beyond their buffers. The unchecked compatibility wrapper
+    /// returns `NaN` for the same invalid inputs.
+    pub fn try_approximate_l2_sqr_prerotated(
+        rotated_query: &[f32],
+        quantized: &QuantizedVector,
+    ) -> crate::Result<f32> {
+        validate_quantized_vector(quantized, rotated_query.len())?;
+        ensure_finite(rotated_query, "rotated_query")?;
+        Ok(approximate_l2_sqr_prerotated_unchecked(
+            rotated_query,
+            quantized,
+        ))
     }
 
     /// Approximate L2 distance squared.
@@ -629,6 +690,8 @@ impl RaBitQQuantizer {
                 got: query.len(),
             });
         }
+        ensure_finite(query, "query")?;
+        validate_quantized_vector(quantized, self.dimension)?;
 
         let default_centroid = vec![0.0f32; self.dimension];
         let centroid = self.centroid.as_deref().unwrap_or(&default_centroid);
@@ -685,6 +748,8 @@ impl RaBitQQuantizer {
                 got: quantized.dimension,
             });
         }
+        ensure_finite(query, "query")?;
+        validate_quantized_vector(quantized, self.dimension)?;
 
         let query_norm_sqr = match self.centroid.as_deref() {
             Some(centroid) => query
@@ -789,6 +854,7 @@ impl RaBitQQuantizer {
                 got: rotated_parent.len(),
             });
         }
+        ensure_finite(rotated_parent, "rotated_parent")?;
         let zero = vec![0.0f32; self.dimension];
         let quantized = self.quantize_prerotated(rotated_residual, &zero)?;
         // Precompute <R*parent, xu_cb> where xu_cb = codes + cb.
@@ -825,27 +891,158 @@ impl RaBitQQuantizer {
     ///   [`quantize_edge_prerotated`](Self::quantize_edge_prerotated).
     #[inline]
     pub fn edge_distance_term_prerotated(rotated_query: &[f32], edge: &EdgeQuantizedVector) -> f32 {
-        let qv = &edge.quantized;
-        let cb = -((1u32 << qv.ex_bits) as f32 - 0.5);
-        // Two-accumulator reduction for FP latency hiding.
-        let mut ip0 = 0.0f32;
-        let mut ip1 = 0.0f32;
-        let codes = &qv.codes;
-        let pairs = rotated_query.len() / 2;
-        for i in 0..pairs {
-            let j = i * 2;
-            ip0 += rotated_query[j] * (codes[j] as f32 + cb);
-            ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
+        if !quantized_shape_is_safe(&edge.quantized, rotated_query.len()) {
+            return f32::NAN;
         }
-        if rotated_query.len() % 2 != 0 {
-            let last = rotated_query.len() - 1;
-            ip0 += rotated_query[last] * (codes[last] as f32 + cb);
-        }
-        let ip_qv = ip0 + ip1;
-        // <R*(q-u), xu_cb> = <R*q, xu_cb> - <R*u, xu_cb>
-        let ip_residual = ip_qv - edge.ip_parent_rot_codes;
-        (qv.f_add + qv.f_rescale * ip_residual).max(0.0)
+        edge_distance_term_prerotated_unchecked(rotated_query, edge)
     }
+
+    /// Checked form of [`edge_distance_term_prerotated`](Self::edge_distance_term_prerotated).
+    pub fn try_edge_distance_term_prerotated(
+        rotated_query: &[f32],
+        edge: &EdgeQuantizedVector,
+    ) -> crate::Result<f32> {
+        let qv = &edge.quantized;
+        validate_quantized_vector(qv, rotated_query.len())?;
+        ensure_finite(rotated_query, "rotated_query")?;
+        if !edge.ip_parent_rot_codes.is_finite() {
+            return Err(VQuantError::InvalidConfig {
+                field: "edge",
+                reason: "contains non-finite correction data",
+            });
+        }
+        Ok(edge_distance_term_prerotated_unchecked(rotated_query, edge))
+    }
+}
+
+fn approximate_l2_sqr_prerotated_unchecked(
+    rotated_query: &[f32],
+    quantized: &QuantizedVector,
+) -> f32 {
+    let cb = -((1 << quantized.ex_bits) as f32 - 0.5);
+    // Two-accumulator reduction: breaks the serial FP dependency chain so
+    // that LLVM can issue two fmadd streams in parallel (latency hiding).
+    let mut ip0 = 0.0f32;
+    let mut ip1 = 0.0f32;
+    let codes = &quantized.codes;
+    let chunks = rotated_query.len() / 2;
+    for i in 0..chunks {
+        let j = i * 2;
+        ip0 += rotated_query[j] * (codes[j] as f32 + cb);
+        ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
+    }
+    if rotated_query.len() % 2 != 0 {
+        let last = rotated_query.len() - 1;
+        ip0 += rotated_query[last] * (codes[last] as f32 + cb);
+    }
+    let ip = ip0 + ip1;
+    quantized.f_add + quantized.f_rescale * ip
+}
+
+fn edge_distance_term_prerotated_unchecked(
+    rotated_query: &[f32],
+    edge: &EdgeQuantizedVector,
+) -> f32 {
+    let qv = &edge.quantized;
+    let cb = -((1u32 << qv.ex_bits) as f32 - 0.5);
+    // Two-accumulator reduction for FP latency hiding.
+    let mut ip0 = 0.0f32;
+    let mut ip1 = 0.0f32;
+    let codes = &qv.codes;
+    let pairs = rotated_query.len() / 2;
+    for i in 0..pairs {
+        let j = i * 2;
+        ip0 += rotated_query[j] * (codes[j] as f32 + cb);
+        ip1 += rotated_query[j + 1] * (codes[j + 1] as f32 + cb);
+    }
+    if rotated_query.len() % 2 != 0 {
+        let last = rotated_query.len() - 1;
+        ip0 += rotated_query[last] * (codes[last] as f32 + cb);
+    }
+    let ip_qv = ip0 + ip1;
+    // <R*(q-u), xu_cb> = <R*q, xu_cb> - <R*u, xu_cb>
+    let ip_residual = ip_qv - edge.ip_parent_rot_codes;
+    (qv.f_add + qv.f_rescale * ip_residual).max(0.0)
+}
+
+fn quantized_shape_is_safe(code: &QuantizedVector, expected: usize) -> bool {
+    code.dimension == expected && code.codes.len() == expected && code.ex_bits <= 7
+}
+
+fn ensure_finite(values: &[f32], field: &'static str) -> crate::Result<()> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(VQuantError::InvalidConfig {
+            field,
+            reason: "must contain only finite values",
+        });
+    }
+    Ok(())
+}
+
+fn validate_quantized_vector(code: &QuantizedVector, expected: usize) -> crate::Result<()> {
+    if code.dimension != expected {
+        return Err(VQuantError::DimensionMismatch {
+            expected,
+            got: code.dimension,
+        });
+    }
+    if code.codes.len() != expected {
+        return Err(VQuantError::DimensionMismatch {
+            expected,
+            got: code.codes.len(),
+        });
+    }
+    let binary_len = expected.div_ceil(8);
+    if code.binary_codes.len() != binary_len {
+        return Err(VQuantError::DimensionMismatch {
+            expected: binary_len,
+            got: code.binary_codes.len(),
+        });
+    }
+    if code.ex_bits > 7 {
+        return Err(VQuantError::InvalidConfig {
+            field: "quantized.ex_bits",
+            reason: "must be 0-7",
+        });
+    }
+    let extended_bits =
+        expected
+            .checked_mul(code.ex_bits as usize)
+            .ok_or(VQuantError::InvalidConfig {
+                field: "quantized.dimension",
+                reason: "packed code size overflows usize",
+            })?;
+    let extended_len = extended_bits.div_ceil(8);
+    if code.extended_codes.len() != extended_len {
+        return Err(VQuantError::DimensionMismatch {
+            expected: extended_len,
+            got: code.extended_codes.len(),
+        });
+    }
+    let max_code = (1u16 << (code.ex_bits + 1)) - 1;
+    if code.codes.iter().any(|&value| value > max_code) {
+        return Err(VQuantError::InvalidConfig {
+            field: "quantized.codes",
+            reason: "contains a value outside the configured bit width",
+        });
+    }
+    if [
+        code.delta,
+        code.vl,
+        code.f_add,
+        code.f_rescale,
+        code.f_error,
+        code.residual_norm,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return Err(VQuantError::InvalidConfig {
+            field: "quantized",
+            reason: "contains non-finite correction data",
+        });
+    }
+    Ok(())
 }
 
 /// A RaBitQ-quantized edge `R · (v − u)` that composes with an externally
@@ -1642,5 +1839,96 @@ mod tests {
             let qv = q.quantize(&v).unwrap();
             assert_eq!(qv.ex_bits as usize, bits - 1);
         }
+    }
+
+    #[test]
+    fn rejects_empty_and_nonfinite_training_data() {
+        let mut q = RaBitQQuantizer::binary(4, 42).unwrap();
+        assert!(matches!(
+            q.fit(&[], 0),
+            Err(VQuantError::InvalidConfig {
+                field: "num_vectors",
+                ..
+            })
+        ));
+        assert!(matches!(
+            q.fit(&[0.0, f32::NAN, 0.0, 0.0], 1),
+            Err(VQuantError::InvalidConfig {
+                field: "vectors",
+                ..
+            })
+        ));
+        assert!(matches!(
+            q.quantize(&[0.0, f32::INFINITY, 0.0, 0.0]),
+            Err(VQuantError::InvalidConfig {
+                field: "vector",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_nonfinite_config_and_overflowing_dimensions() {
+        let config = RaBitQConfig {
+            total_bits: 4,
+            t_const: Some(f32::NAN),
+        };
+        assert!(matches!(
+            RaBitQQuantizer::with_config(4, 42, config),
+            Err(VQuantError::InvalidConfig {
+                field: "t_const",
+                ..
+            })
+        ));
+        assert!(matches!(
+            RaBitQQuantizer::binary(usize::MAX, 42),
+            Err(VQuantError::InvalidConfig {
+                field: "dimension",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn mismatched_quantizer_code_returns_error_without_unwinding() {
+        let q32 = RaBitQQuantizer::binary(32, 1).unwrap();
+        let q64 = RaBitQQuantizer::binary(64, 2).unwrap();
+        let code32 = q32.quantize(&[0.25; 32]).unwrap();
+        let query64 = [0.5; 64];
+
+        let result = std::panic::catch_unwind(|| q64.approximate_l2_sqr(&query64, &code32));
+        assert!(result.is_ok(), "dimension mismatch must not unwind");
+        assert!(matches!(
+            result.unwrap(),
+            Err(VQuantError::DimensionMismatch {
+                expected: 64,
+                got: 32
+            })
+        ));
+
+        let rotated = q64.rotate_query(&query64).unwrap();
+        assert!(matches!(
+            RaBitQQuantizer::try_approximate_l2_sqr_prerotated(&rotated, &code32),
+            Err(VQuantError::DimensionMismatch {
+                expected: 64,
+                got: 32
+            })
+        ));
+        assert!(RaBitQQuantizer::approximate_l2_sqr_prerotated(&rotated, &code32).is_nan());
+    }
+
+    #[test]
+    fn malformed_public_code_returns_typed_error() {
+        let q = RaBitQQuantizer::binary(8, 42).unwrap();
+        let mut code = q.quantize(&[0.25; 8]).unwrap();
+        code.codes.pop();
+
+        assert!(matches!(
+            q.approximate_l2_sqr(&[0.5; 8], &code),
+            Err(VQuantError::DimensionMismatch {
+                expected: 8,
+                got: 7
+            })
+        ));
     }
 }

@@ -142,6 +142,12 @@ impl TernaryQuantizer {
         }
     }
 
+    /// Create a ternary quantizer after validating its dimension and thresholds.
+    pub fn try_new(dimension: usize, config: TernaryConfig) -> crate::Result<Self> {
+        validate_config(dimension, &config)?;
+        Ok(Self::new(dimension, config))
+    }
+
     /// Create a quantizer with default config for the given dimension.
     #[must_use]
     pub fn with_dimension(dimension: usize) -> Self {
@@ -153,12 +159,27 @@ impl TernaryQuantizer {
     /// Computes per-dimension mean and, if `target_sparsity` is set, per-dimension
     /// thresholds that achieve the desired sparsity.
     pub fn fit(&mut self, vectors: &[f32], num_vectors: usize) -> crate::Result<()> {
-        if vectors.len() != num_vectors * self.dimension {
+        validate_config(self.dimension, &self.config)?;
+        if num_vectors == 0 {
+            return Err(VQuantError::InvalidConfig {
+                field: "num_vectors",
+                reason: "must be > 0",
+            });
+        }
+        let expected =
+            num_vectors
+                .checked_mul(self.dimension)
+                .ok_or(VQuantError::InvalidConfig {
+                    field: "num_vectors",
+                    reason: "element count overflows usize",
+                })?;
+        if vectors.len() != expected {
             return Err(VQuantError::DimensionMismatch {
-                expected: num_vectors * self.dimension,
+                expected,
                 got: vectors.len(),
             });
         }
+        ensure_finite(vectors, "vectors")?;
 
         let mut mean = vec![0.0f32; self.dimension];
         for i in 0..num_vectors {
@@ -209,12 +230,14 @@ impl TernaryQuantizer {
 
     /// Quantize a vector to ternary codes.
     pub fn quantize(&self, vector: &[f32]) -> crate::Result<TernaryVector> {
+        validate_config(self.dimension, &self.config)?;
         if vector.len() != self.dimension {
             return Err(VQuantError::DimensionMismatch {
                 expected: self.dimension,
                 got: vector.len(),
             });
         }
+        ensure_finite(vector, "vector")?;
 
         let centered: Vec<f32> = if let Some(ref mean) = self.mean {
             vector
@@ -274,6 +297,47 @@ impl TernaryQuantizer {
             original_norm,
         })
     }
+}
+
+fn validate_config(dimension: usize, config: &TernaryConfig) -> crate::Result<()> {
+    if dimension == 0 {
+        return Err(VQuantError::InvalidConfig {
+            field: "dimension",
+            reason: "must be > 0",
+        });
+    }
+    if !config.threshold_low.is_finite() || !config.threshold_high.is_finite() {
+        return Err(VQuantError::InvalidConfig {
+            field: "thresholds",
+            reason: "must be finite",
+        });
+    }
+    if config.threshold_low > config.threshold_high {
+        return Err(VQuantError::InvalidConfig {
+            field: "thresholds",
+            reason: "threshold_low must be <= threshold_high",
+        });
+    }
+    if config
+        .target_sparsity
+        .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        return Err(VQuantError::InvalidConfig {
+            field: "target_sparsity",
+            reason: "must be finite and within 0-1",
+        });
+    }
+    Ok(())
+}
+
+fn ensure_finite(values: &[f32], field: &'static str) -> crate::Result<()> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(VQuantError::InvalidConfig {
+            field,
+            reason: "must contain only finite values",
+        });
+    }
+    Ok(())
 }
 
 /// Inner product between two ternary vectors.
@@ -594,5 +658,76 @@ mod tests {
         let q = tq.quantize(&[1.0; 8]).unwrap();
         // query dimension 4 != quantized dimension 8
         assert_eq!(asymmetric_inner_product(&[1.0f32; 4], &q), 0.0);
+    }
+
+    #[test]
+    fn rejects_empty_and_nonfinite_training_data() {
+        let mut tq = TernaryQuantizer::with_dimension(4);
+        assert!(matches!(
+            tq.fit(&[], 0),
+            Err(VQuantError::InvalidConfig {
+                field: "num_vectors",
+                ..
+            })
+        ));
+        assert!(matches!(
+            tq.fit(&[0.0, f32::NAN, 0.0, 0.0], 1),
+            Err(VQuantError::InvalidConfig {
+                field: "vectors",
+                ..
+            })
+        ));
+        assert!(matches!(
+            tq.quantize(&[0.0, f32::INFINITY, 0.0, 0.0]),
+            Err(VQuantError::InvalidConfig {
+                field: "vector",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn validates_dimension_thresholds_and_target_sparsity() {
+        assert!(matches!(
+            TernaryQuantizer::try_new(0, TernaryConfig::default()),
+            Err(VQuantError::InvalidConfig {
+                field: "dimension",
+                ..
+            })
+        ));
+
+        for config in [
+            TernaryConfig {
+                threshold_low: 0.5,
+                threshold_high: -0.5,
+                ..TernaryConfig::default()
+            },
+            TernaryConfig {
+                threshold_low: f32::NEG_INFINITY,
+                ..TernaryConfig::default()
+            },
+            TernaryConfig {
+                target_sparsity: Some(1.01),
+                ..TernaryConfig::default()
+            },
+            TernaryConfig {
+                target_sparsity: Some(f32::NAN),
+                ..TernaryConfig::default()
+            },
+        ] {
+            assert!(TernaryQuantizer::try_new(4, config).is_err());
+        }
+    }
+
+    #[test]
+    fn fit_element_count_overflow_returns_error() {
+        let mut tq = TernaryQuantizer::with_dimension(2);
+        assert!(matches!(
+            tq.fit(&[], usize::MAX),
+            Err(VQuantError::InvalidConfig {
+                field: "num_vectors",
+                ..
+            })
+        ));
     }
 }
