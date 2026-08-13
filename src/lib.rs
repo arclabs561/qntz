@@ -68,7 +68,7 @@ pub mod rabitq;
 pub mod ternary;
 
 #[cfg(feature = "distquant")]
-/// Distributional quantization: optimal codebooks under distributional priors (feature-gated).
+/// Distributional quantization with codebooks fitted to distributional priors (feature-gated).
 pub mod distquant;
 
 #[cfg(feature = "adaptive")]

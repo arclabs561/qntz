@@ -1,11 +1,11 @@
-//! Distributional quantization: optimal codebooks under distributional priors.
+//! Distributional quantization with codebooks fitted to distributional priors.
 //!
 //! Given a distributional assumption about the data (Gaussian, logistic, Gumbel, etc.),
-//! distributional quantization places reconstruction points at optimal quantiles of the
-//! distribution, minimizing expected reconstruction error.
+//! distributional quantization places reconstruction points according to quantiles of the
+//! selected distribution.
 //!
-//! This complements RaBitQ (hardware-friendly ANN codes) with information-theoretically
-//! optimal compression for cases where the distribution shape is known.
+//! This complements RaBitQ (hardware-friendly ANN codes) when a distributional
+//! assumption is useful.
 //!
 //! # References
 //!
@@ -209,11 +209,10 @@ fn erf(x: f64) -> f64 {
     sign * (1.0 - poly * (-x * x).exp())
 }
 
-/// Build an optimal codebook for `n` quantization levels under the given distribution.
+/// Build a quantile-based codebook for `n` levels under the given distribution.
 ///
-/// Places reconstruction points at the conditional expectations within each quantile bin.
-/// For symmetric distributions, this is equivalent to midpoints of the quantile function
-/// evaluated at evenly spaced probabilities.
+/// Places reconstruction points at the quantile function evaluated at evenly spaced
+/// probabilities.
 ///
 /// The `beta` parameter scales the range: larger beta covers more of the distribution's
 /// tails. `None` uses 1.0 (standard).
@@ -461,10 +460,10 @@ pub fn best_distribution(data: &[f64], bits: u8) -> (Distribution, f64) {
 
 // ── Lloyd-Max optimal codebooks ─────────────────────────────────────────────
 //
-// The Lloyd-Max algorithm computes optimal reconstruction points and decision
-// boundaries for a known distribution, minimizing expected MSE. This is the
-// classical iterative approach (as opposed to the quantile-placement heuristic
-// above). For symmetric distributions the codebook is symmetric by construction.
+// The Lloyd-Max iteration refines reconstruction points and decision boundaries
+// toward a local stationary point of expected MSE. This is the classical
+// iterative approach (as opposed to the quantile-placement heuristic above).
+// For symmetric distributions the codebook is symmetric by construction.
 //
 // References:
 // - Lloyd (1982). "Least squares quantization in PCM."
@@ -542,8 +541,8 @@ pub struct LloydMaxCodebook {
     pub iterations: usize,
 }
 
-/// Compute an optimal quantization codebook for a symmetric distribution
-/// using the Lloyd-Max algorithm.
+/// Compute a quantization codebook for a symmetric distribution using the
+/// Lloyd-Max iteration.
 ///
 /// Returns a [`LloydMaxCodebook`] with `levels` reconstruction points and
 /// `levels - 1` decision boundaries.
