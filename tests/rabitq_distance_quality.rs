@@ -306,6 +306,8 @@ fn binary_error_margin_covers_adversarial_finite_pairs() {
 
     let mut covered = [0usize; 4];
     let mut total = [0usize; 4];
+    let mut margin_sum = [0.0f32; 4];
+    let mut max_margin = [0.0f32; 4];
     for seed in 1..=128 {
         let quantizer = RaBitQQuantizer::binary(dim, seed).unwrap();
         for (family, (target, query)) in pairs.iter().enumerate() {
@@ -318,6 +320,8 @@ fn binary_error_margin_covers_adversarial_finite_pairs() {
             assert!(estimate.is_finite() && margin.is_finite());
             covered[family] += usize::from((estimate - exact).abs() <= margin + 1e-6);
             total[family] += 1;
+            margin_sum[family] += margin;
+            max_margin[family] = max_margin[family].max(margin);
         }
     }
 
@@ -335,6 +339,12 @@ fn binary_error_margin_covers_adversarial_finite_pairs() {
             covered[family],
             total[family],
             coverage * 100.0
+        );
+        let mean_margin = margin_sum[family] / total[family] as f32;
+        assert!(
+            mean_margin <= 1.0 && max_margin[family] <= 2.0,
+            "epsilon=1.9 margin is too loose for unit-norm {name} pairs: mean={mean_margin}, max={}",
+            max_margin[family]
         );
     }
 }
