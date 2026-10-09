@@ -95,7 +95,7 @@ impl MatryoshkaQuantizer {
         }
         let (lo0, hi0) = finite_min_max(values)?;
         let mut sorted: Vec<f32> = values.iter().copied().filter(|v| v.is_finite()).collect();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(f32::total_cmp);
 
         // Candidate symmetric clip quantiles. gamma = 0 is the min/max baseline.
         const GAMMAS: [f32; 7] = [0.0, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1];
@@ -219,6 +219,19 @@ fn quantile(sorted: &[f32], q: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fit` sorts the input to pick clip quantiles; NaN and infinities in the
+    /// input must be skipped, not panic the sort.
+    #[test]
+    fn fit_tolerates_non_finite_values() {
+        let mut values: Vec<f32> = (0..200).map(|i| (i as f32 * 0.37).sin()).collect();
+        for i in (0..200).step_by(9) {
+            values[i] = f32::NAN;
+        }
+        values[5] = f32::INFINITY;
+        let q = MatryoshkaQuantizer::fit(&values, 8, &[2, 4, 8], &[0.5, 0.3, 0.2]).unwrap();
+        let _ = q;
+    }
 
     #[test]
     fn slice_matches_eq6() {

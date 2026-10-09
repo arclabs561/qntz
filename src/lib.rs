@@ -35,6 +35,11 @@
 
 use thiserror::Error;
 
+/// Compiles and runs the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 /// Convenience result type for this crate.
 pub type Result<T> = std::result::Result<T, VQuantError>;
 

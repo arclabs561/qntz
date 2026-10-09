@@ -1374,6 +1374,57 @@ fn apply_rotation(vector: &[f32], rotation: &[f32], dimension: usize) -> Vec<f32
 mod tests {
     use super::*;
 
+    /// Gao & Long (2024): the 1-bit RaBitQ distance estimate is unbiased, and
+    /// its error is approximately normal with the margin `epsilon_0 = 1.9`
+    /// standard deviations wide, so about 2*Phi(1.9) - 1 = 94.3% of estimates
+    /// fall inside `squared_distance_error_margin`. Check the mean signed
+    /// error is within 4 standard errors of zero and the coverage is within
+    /// 4 binomial standard errors (about 0.021 at n = 2000) of 94.3%.
+    #[test]
+    fn binary_estimate_is_unbiased_within_paper_margin() {
+        let dim = 128;
+        let pairs = 2000;
+        let mut s = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f32 / (1u32 << 30) as f32 - 1.0
+        };
+        let quantizer = RaBitQQuantizer::binary(dim, 7).unwrap();
+        let mut errors = Vec::with_capacity(pairs);
+        let mut inside = 0usize;
+        for _ in 0..pairs {
+            let x: Vec<f32> = (0..dim).map(|_| next()).collect();
+            let q: Vec<f32> = (0..dim).map(|_| next()).collect();
+            let code = quantizer.quantize(&x).unwrap();
+            let est = quantizer.approximate_l2_sqr(&q, &code).unwrap() as f64;
+            let truth: f64 = x
+                .iter()
+                .zip(&q)
+                .map(|(a, b)| f64::from(a - b) * f64::from(a - b))
+                .sum();
+            let margin = f64::from(quantizer.squared_distance_error_margin(&q, &code).unwrap());
+            if (est - truth).abs() <= margin {
+                inside += 1;
+            }
+            errors.push(est - truth);
+        }
+        let n = errors.len() as f64;
+        let mean = errors.iter().sum::<f64>() / n;
+        let var = errors.iter().map(|e| (e - mean) * (e - mean)).sum::<f64>() / (n - 1.0);
+        let se = (var / n).sqrt();
+        assert!(
+            mean.abs() <= 4.0 * se,
+            "mean error {mean} vs standard error {se}"
+        );
+        let coverage = inside as f64 / n;
+        assert!(
+            (coverage - 0.9426).abs() <= 0.021,
+            "{coverage} of estimates inside the margin, expected about 0.943"
+        );
+    }
+
     #[test]
     fn test_rabitq_binary() {
         let quantizer = RaBitQQuantizer::binary(64, 42).unwrap();

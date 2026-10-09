@@ -9,8 +9,18 @@ description = "Vector quantization"
 repository = "https://github.com/arclabs561/qntz"
 homepage = "https://github.com/arclabs561/qntz"
 documentation = "https://docs.rs/qntz"
-keywords = ["quantization", "vector-search", "ann", "pq", "compression"]
+keywords = ["quantization", "vector-search", "ann", "rabitq", "compression"]
 categories = ["algorithms", "science"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/benches/**",
+    "/examples/**",
+    "/scripts/**",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE*",
+]
 
 [workspace]
 
