@@ -962,7 +962,11 @@ fn edge_distance_term_prerotated_unchecked(
     let ip_qv = ip0 + ip1;
     // <R*(q-u), xu_cb> = <R*q, xu_cb> - <R*u, xu_cb>
     let ip_residual = ip_qv - edge.ip_parent_rot_codes;
-    (qv.f_add + qv.f_rescale * ip_residual).max(0.0)
+    // Signed on purpose: this estimates ||q-v||^2 - ||q-u||^2, which is
+    // negative whenever v is nearer the query than its parent u. Clamping it
+    // at zero ties every such child at ||q-u||^2 and destroys their ordering
+    // (same failure as the clamp once in `approximate_l2_sqr`).
+    qv.f_add + qv.f_rescale * ip_residual
 }
 
 fn quantized_shape_is_safe(code: &QuantizedVector, expected: usize) -> bool {
@@ -1739,6 +1743,77 @@ mod tests {
             mean_rel < 0.3,
             "8-bit estimate mean relative error {mean_rel:.3} too high \
              (clamped proxy / spurious centroid term regression?)"
+        );
+    }
+
+    /// The edge term estimates `||q-v||^2 - ||q-u||^2`, which is negative
+    /// whenever the child `v` is closer to the query than its parent `u`.
+    /// Clamping it at zero made every such child score exactly `||q-u||^2`,
+    /// so near children tied and their ordering was lost.
+    #[test]
+    fn edge_term_is_signed_for_children_nearer_than_parent() {
+        let dim = 64;
+        let mut s = 0xC0FFEE_u64;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f32 / (1u32 << 31) as f32 - 0.5
+        };
+        let mut quantizer = RaBitQQuantizer::with_config(dim, 3, RaBitQConfig::bits8()).unwrap();
+        quantizer.set_centroid(vec![0.0f32; dim]).unwrap();
+
+        let query: Vec<f32> = (0..dim).map(|_| rng() * 4.0).collect();
+        // Parent far from the query; children at increasing distance from the
+        // query, all much closer to it than the parent.
+        let parent: Vec<f32> = query.iter().map(|&x| x + 2.0 + rng()).collect();
+        let children: Vec<Vec<f32>> = (1..=20)
+            .map(|k| {
+                let scale = 0.05 * k as f32;
+                query.iter().map(|&x| x + scale * rng()).collect()
+            })
+            .collect();
+
+        let l2 =
+            |a: &[f32], b: &[f32]| -> f32 { a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum() };
+        let parent_d2 = l2(&query, &parent);
+        let u_rot = quantizer.rotate_query(&parent).unwrap();
+        let q_rot = quantizer.rotate_query(&query).unwrap();
+
+        let mut approx = Vec::new();
+        let mut exact = Vec::new();
+        for child in &children {
+            let v_rot = quantizer.rotate_query(child).unwrap();
+            let residual: Vec<f32> = v_rot.iter().zip(&u_rot).map(|(v, u)| v - u).collect();
+            let edge = quantizer
+                .quantize_edge_prerotated(&u_rot, &residual)
+                .unwrap();
+            let term = RaBitQQuantizer::edge_distance_term_prerotated(&q_rot, &edge);
+            let true_d2 = l2(&query, child);
+            assert!(true_d2 < parent_d2);
+            assert!(
+                term < 0.0,
+                "edge term {term} must be negative when the child ({true_d2}) is \
+                 nearer the query than the parent ({parent_d2})"
+            );
+            approx.push(parent_d2 + term);
+            exact.push(true_d2);
+        }
+
+        // The estimates must preserve the true ordering of the children.
+        let mut by_exact: Vec<usize> = (0..exact.len()).collect();
+        by_exact.sort_by(|&a, &b| exact[a].total_cmp(&exact[b]));
+        let mut by_approx: Vec<usize> = (0..approx.len()).collect();
+        by_approx.sort_by(|&a, &b| approx[a].total_cmp(&approx[b]));
+        let top5_hits = by_exact[..5]
+            .iter()
+            .filter(|i| by_approx[..5].contains(i))
+            .count();
+        assert!(
+            top5_hits >= 4,
+            "approx ranking lost the nearest children: exact {:?} approx {:?}",
+            &by_exact[..5],
+            &by_approx[..5]
         );
     }
 

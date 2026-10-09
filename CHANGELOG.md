@@ -5,6 +5,12 @@
 ### Changed
 - Updated the `entropy_coded_quantization` example to use `ans 0.4`.
 
+### Fixed
+- `RaBitQQuantizer::edge_distance_term_prerotated` no longer clamps the edge
+  term at zero. The term estimates `||q-v||^2 - ||q-u||^2` and is negative
+  whenever a child is nearer the query than its parent; the clamp tied all
+  such children at `||q-u||^2` and lost their ordering.
+
 ## [0.2.1] - 2026-07-03
 
 ### Added
