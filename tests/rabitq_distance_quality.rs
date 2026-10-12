@@ -35,7 +35,11 @@ fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
         .collect()
 }
 
-/// Spearman rank correlation between two vectors.
+/// Pearson correlation of average tied ranks (Spearman correlation).
+///
+/// This evaluation helper scores fewer than three pairs or zero rank variance
+/// as zero; mathematical Spearman correlation is undefined for constant input.
+/// See R's `cor(method = "spearman")` and `rank(ties.method = "average")`.
 fn spearman_correlation(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     let n = a.len();
@@ -47,8 +51,17 @@ fn spearman_correlation(a: &[f32], b: &[f32]) -> f32 {
         let mut indexed: Vec<(usize, f32)> = vals.iter().copied().enumerate().collect();
         indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
         let mut ranks = vec![0.0f32; vals.len()];
-        for (rank, &(idx, _)) in indexed.iter().enumerate() {
-            ranks[idx] = rank as f32;
+        let mut start = 0;
+        while start < indexed.len() {
+            let mut end = start + 1;
+            while end < indexed.len() && indexed[end].1 == indexed[start].1 {
+                end += 1;
+            }
+            let average_rank = (start + end - 1) as f32 / 2.0;
+            for &(idx, _) in &indexed[start..end] {
+                ranks[idx] = average_rank;
+            }
+            start = end;
         }
         ranks
     }
@@ -76,6 +89,40 @@ fn spearman_correlation(a: &[f32], b: &[f32]) -> f32 {
     } else {
         cov / denom
     }
+}
+
+#[test]
+fn spearman_oracle_averages_ties_and_preserves_paired_permutations() {
+    // Centered rank cross-product is 1.5; squared deviations sum to 2 and 1.5.
+    // Thus rho = 1.5 / sqrt(3), independently of input order within the tie.
+    let expected = 3.0f32.sqrt() / 2.0;
+    for values in [[1.0, 2.0, 3.0], [2.0, 1.0, 3.0]] {
+        let actual = spearman_correlation(&values, &[1.0, 1.0, 2.0]);
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn spearman_oracle_constant_inputs_score_zero() {
+    let varying = [1.0, 2.0, 3.0];
+    let constant = [1.0, 1.0, 1.0];
+    assert_eq!(spearman_correlation(&varying, &constant), 0.0);
+    assert_eq!(spearman_correlation(&constant, &varying), 0.0);
+    assert_eq!(spearman_correlation(&constant, &constant), 0.0);
+}
+
+#[test]
+fn spearman_oracle_untied_and_small_sample_controls() {
+    assert_eq!(
+        spearman_correlation(&[1.0, 2.0, 3.0], &[10.0, 20.0, 30.0]),
+        1.0
+    );
+    assert_eq!(
+        spearman_correlation(&[1.0, 2.0, 3.0], &[30.0, 20.0, 10.0]),
+        -1.0
+    );
+    assert_eq!(spearman_correlation(&[], &[]), 0.0);
+    assert_eq!(spearman_correlation(&[1.0, 2.0], &[1.0, 2.0]), 0.0);
 }
 
 /// Test distance correlation for a given bit config and dimension.
