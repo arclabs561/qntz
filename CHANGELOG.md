@@ -1,5 +1,12 @@
 # Changelog
 
+## Source history (unversioned)
+
+These entries identify source changes without assigning a package release.
+
+- Correct the distance-quality test oracle to average tied ranks; retain its zero score for constant predictions. This is a test-only change to the evaluation helper, not a production quantizer change.
+  ([93eb438](https://github.com/arclabs561/qntz/commit/93eb438edf56f79987f13a3433dce24f5d5aaaad))
+
 ## [Unreleased]
 
 ### Changed
