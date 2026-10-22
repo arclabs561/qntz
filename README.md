@@ -4,7 +4,7 @@ Vector quantization.
 
 ```toml
 [dependencies]
-qntz = "0.2.1"
+qntz = "0.2.2"
 ```
 
 ```rust
@@ -37,6 +37,9 @@ assert_eq!(hamming_distance(&packed_a, &packed_b), 2);
 | `serde` | derives on selected binary, RaBitQ, and matryoshka types |
 
 See the runnable [examples](examples/README.md) for the optional quantizers.
+
+The Rust library requires Rust 1.80 without `simd`. The optional `simd`
+feature requires Rust 1.89 through `innr`.
 
 qntz provides quantization and code operations, not an ANN index; validation
 and error behavior are specific to each API.
