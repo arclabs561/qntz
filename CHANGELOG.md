@@ -2,9 +2,7 @@
 
 ## [Unreleased]
 
-## [0.2.2] - Release candidate
-
-This section describes the prepared release; publication is pending.
+## [0.2.2] - 2026-10-22
 
 ### Added
 - Checked alternatives for distributional quantization and code packing,
