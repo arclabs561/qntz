@@ -17,7 +17,7 @@ doc = false
 
 [dependencies]
 qntz_core = { path = "..", package = "qntz", features = ["rabitq", "ternary"] }
-numpy = "0.29.0"
+numpy = "0.30.0"
 pyo3 = "0.29.0"
 
 [workspace]
