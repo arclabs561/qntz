@@ -37,7 +37,7 @@ dist = qntz.hamming_distance(packed_a, packed_b)  # 2
 
 | Name | Description |
 |------|-------------|
-| `RaBitQQuantizer` | Quantizer using randomized Hadamard rotation, 1-8 bits/dim |
+| `RaBitQQuantizer` | Quantizer using random orthogonal rotation, 1-8 bits/dim |
 | `RaBitQQuantizer.fit` | Fit centroid from training vectors |
 | `RaBitQQuantizer.quantize` | Quantize a single vector, returns `QuantizedVector` |
 | `RaBitQQuantizer.approximate_distance` | Approximate Euclidean distance to a quantized vector |
@@ -58,7 +58,11 @@ dist = qntz.hamming_distance(packed_a, packed_b)  # 2
 
 ## numpy support
 
-All functions accept numpy arrays or Python lists. Packed outputs are numpy uint8 arrays.
+Raw-vector inputs accept Python lists or contiguous NumPy arrays (`float32`
+for vectors, `uint8` for bits). `fit` accepts a two-dimensional `float32`
+array, or flat input with an explicit `num_vectors`. Ternary comparison
+functions take `TernaryVector` objects returned by `quantize`. `pack_binary`
+returns a NumPy `uint8` array.
 
 ## License
 
