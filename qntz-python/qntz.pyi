@@ -4,12 +4,14 @@ Note: NaN values in float inputs will propagate through quantization silently.
 Filter NaN before calling if this is not desired.
 """
 
-from typing import Optional, Union
+from typing import Optional, Union, final
 
 import numpy as np
 import numpy.typing as npt
 
 __version__: str
+
+__all__: list[str]
 
 # -- simd_ops --
 
@@ -84,6 +86,7 @@ def batch_asymmetric_l2(
 
 # -- rabitq --
 
+@final
 class QuantizedVector:
     """Quantized vector produced by RaBitQ.
 
@@ -137,6 +140,7 @@ class QuantizedVector:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class RaBitQQuantizer:
     """RaBitQ quantizer with extended bit support.
 
@@ -149,7 +153,7 @@ class RaBitQQuantizer:
         total_bits: bits per dimension, 1-8 (default 4).
     """
 
-    def __init__(self, dimension: int, seed: int, total_bits: int = 4) -> None: ...
+    def __new__(cls, dimension: int, seed: int, total_bits: int = 4) -> "RaBitQQuantizer": ...
     def fit(
         self,
         vectors: Union[list[float], npt.NDArray[np.float32]],
@@ -194,6 +198,7 @@ class RaBitQQuantizer:
 
 # -- ternary --
 
+@final
 class TernaryVector:
     """Ternary quantized vector ({-1, 0, +1} per dimension).
 
@@ -224,6 +229,7 @@ class TernaryVector:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class TernaryQuantizer:
     """Ternary quantizer: maps each dimension to {-1, 0, +1}.
 
@@ -238,14 +244,14 @@ class TernaryQuantizer:
         target_sparsity: adaptive sparsity target, or None (default None).
     """
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         dimension: int,
         threshold_high: float = 0.3,
-        threshold_low: float = -0.3,
+        threshold_low: float = ...,
         normalize: bool = True,
         target_sparsity: Optional[float] = None,
-    ) -> None: ...
+    ) -> "TernaryQuantizer": ...
     def fit(
         self,
         vectors: Union[list[float], npt.NDArray[np.float32]],
