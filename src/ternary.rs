@@ -194,18 +194,17 @@ impl TernaryQuantizer {
         self.mean = Some(mean);
 
         if let Some(target_sparsity) = self.config.target_sparsity {
+            // Fit on the same centered (and, if configured, normalized) values
+            // that `quantize` thresholds, so the target sparsity holds there.
+            let processed: Vec<f32> = vectors
+                .chunks_exact(self.dimension)
+                .flat_map(|v| self.preprocess(v))
+                .collect();
             let mut thresholds = Vec::with_capacity(self.dimension);
 
             for d in 0..self.dimension {
                 let mut values: Vec<f32> = (0..num_vectors)
-                    .map(|i| {
-                        let v = vectors[i * self.dimension + d];
-                        if let Some(ref m) = self.mean {
-                            v - m[d]
-                        } else {
-                            v
-                        }
-                    })
+                    .map(|i| processed[i * self.dimension + d])
                     .collect();
 
                 values.sort_by(|a, b| a.total_cmp(b));
@@ -228,6 +227,27 @@ impl TernaryQuantizer {
         Ok(())
     }
 
+    /// Center by the fitted mean, then L2-normalize if configured.
+    fn preprocess(&self, vector: &[f32]) -> Vec<f32> {
+        let centered: Vec<f32> = if let Some(ref mean) = self.mean {
+            vector
+                .iter()
+                .zip(mean.iter())
+                .map(|(&v, &m)| v - m)
+                .collect()
+        } else {
+            vector.to_vec()
+        };
+
+        if self.config.normalize {
+            let norm: f32 = centered.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 1e-10 {
+                return centered.iter().map(|&x| x / norm).collect();
+            }
+        }
+        centered
+    }
+
     /// Quantize a vector to ternary codes.
     pub fn quantize(&self, vector: &[f32]) -> crate::Result<TernaryVector> {
         validate_config(self.dimension, &self.config)?;
@@ -239,26 +259,7 @@ impl TernaryQuantizer {
         }
         ensure_finite(vector, "vector")?;
 
-        let centered: Vec<f32> = if let Some(ref mean) = self.mean {
-            vector
-                .iter()
-                .zip(mean.iter())
-                .map(|(&v, &m)| v - m)
-                .collect()
-        } else {
-            vector.to_vec()
-        };
-
-        let processed: Vec<f32> = if self.config.normalize {
-            let norm: f32 = centered.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 1e-10 {
-                centered.iter().map(|&x| x / norm).collect()
-            } else {
-                centered
-            }
-        } else {
-            centered
-        };
+        let processed = self.preprocess(vector);
 
         let original_norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
 

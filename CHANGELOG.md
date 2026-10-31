@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- `TernaryQuantizer::fit` with `target_sparsity` fits thresholds on the same
+  centered and L2-normalized values that `quantize` thresholds. With the
+  default `normalize: true`, a 0.5 target previously produced sparsity near 1.
+- `distquant::quantize` with `Distribution::Exponential` centers the codebook
+  on standardized data. Exp(1) quantiles are all non-negative, so values
+  below the mean all mapped to code 0 (67% of an Exp(1) sample; MSE 0.351,
+  now 0.055). `build_codebook` still returns raw quantiles.
+
 ## [0.2.2] - 2026-10-22
 
 ### Added
