@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-30
+
 ### Fixed
 - `TernaryQuantizer::fit` with `target_sparsity` fits thresholds on the same
   centered and L2-normalized values that `quantize` thresholds. With the
