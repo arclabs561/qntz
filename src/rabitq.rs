@@ -187,6 +187,173 @@ pub struct QuantizedVector {
     pub residual_norm: f32,
 }
 
+/// Magic bytes at the start of a serialised [`QuantizedVector`].
+const CODE_MAGIC: &[u8; 6] = b"QNTZRB";
+/// Format version for [`QuantizedVector::to_bytes`].
+pub const CODE_FORMAT_VERSION: u8 = 1;
+/// Header length in bytes: magic, version, ex_bits, reserved, three `u32`
+/// lengths, and six `f32` correction factors.
+pub const CODE_HEADER_LEN: usize = 6 + 1 + 1 + 1 + 4 + 4 + 4 + 6 * 4;
+
+impl QuantizedVector {
+    /// Bytes this code occupies when serialised.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        CODE_HEADER_LEN + self.binary_codes.len() + self.extended_codes.len()
+    }
+
+    /// Append the serialised form to `out`.
+    ///
+    /// The layout is little-endian and self-describing:
+    ///
+    /// ```text
+    /// "QNTZRB"  version:u8  ex_bits:u8  reserved:u8
+    /// dimension:u32  binary_len:u32  extended_len:u32
+    /// delta:f32  vl:f32  f_add:f32  f_rescale:f32  f_error:f32  residual_norm:f32
+    /// binary_codes  extended_codes
+    /// ```
+    ///
+    /// `codes` is not stored: it is `extended + (binary_bit << ex_bits)` for
+    /// every dimension, so writing it would duplicate a value that a decoder
+    /// can derive and that a corrupted file could disagree with.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        out.reserve(self.encoded_len());
+        out.extend_from_slice(CODE_MAGIC);
+        out.push(CODE_FORMAT_VERSION);
+        out.push(self.ex_bits);
+        out.push(0);
+        out.extend_from_slice(&(self.dimension as u32).to_le_bytes());
+        out.extend_from_slice(&(self.binary_codes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(self.extended_codes.len() as u32).to_le_bytes());
+        for value in [
+            self.delta,
+            self.vl,
+            self.f_add,
+            self.f_rescale,
+            self.f_error,
+            self.residual_norm,
+        ] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&self.binary_codes);
+        out.extend_from_slice(&self.extended_codes);
+    }
+
+    /// Serialise this code.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.encoded_len());
+        self.encode_into(&mut out);
+        out
+    }
+
+    /// Rebuild a code from [`Self::to_bytes`].
+    ///
+    /// Everything that can be checked is checked: the magic, the version, the
+    /// bit width, the lengths against the declared dimension, finiteness of the
+    /// correction factors, and that every extended code fits in `ex_bits`. The
+    /// derived `codes` vector is recomputed rather than read.
+    ///
+    /// What cannot be checked is whether these bytes came from
+    /// [`Self::quantize_prerotated`] against the centroid and quantizer the
+    /// caller is about to use. A caller that persists codes is trusting its own
+    /// storage; decoding does not re-derive them from vectors.
+    pub fn from_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        let malformed = |reason: &'static str| VQuantError::MalformedCode { reason };
+        if bytes.len() < CODE_HEADER_LEN {
+            return Err(malformed("shorter than the header"));
+        }
+        if &bytes[0..6] != CODE_MAGIC {
+            return Err(malformed("wrong magic bytes"));
+        }
+        if bytes[6] != CODE_FORMAT_VERSION {
+            return Err(malformed("unsupported format version"));
+        }
+        let ex_bits = bytes[7];
+        if ex_bits > 8 {
+            return Err(malformed("ex_bits above 8"));
+        }
+        let ex_bits_usize = ex_bits as usize;
+
+        let read_u32 = |at: usize| -> u32 {
+            u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        let dimension = read_u32(9) as usize;
+        let binary_len = read_u32(13) as usize;
+        let extended_len = read_u32(17) as usize;
+        if dimension == 0 {
+            return Err(malformed("zero dimension"));
+        }
+        let expected_binary = dimension.div_ceil(8);
+        let expected_extended = (dimension * ex_bits_usize).div_ceil(8);
+        if binary_len != expected_binary {
+            return Err(malformed("binary length does not match the dimension"));
+        }
+        if extended_len != expected_extended {
+            return Err(malformed("extended length does not match the dimension"));
+        }
+        let expected_len = CODE_HEADER_LEN + binary_len + extended_len;
+        if bytes.len() != expected_len {
+            return Err(malformed("length does not match the declared payload"));
+        }
+
+        let mut floats = [0.0f32; 6];
+        for (i, slot) in floats.iter_mut().enumerate() {
+            let at = 21 + i * 4;
+            *slot = f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+            if !slot.is_finite() {
+                return Err(malformed("non-finite correction factor"));
+            }
+        }
+        let [delta, vl, f_add, f_rescale, f_error, residual_norm] = floats;
+
+        let binary_at = CODE_HEADER_LEN;
+        let extended_at = binary_at + binary_len;
+        let binary_codes = bytes[binary_at..extended_at].to_vec();
+        let extended_codes = bytes[extended_at..].to_vec();
+
+        // Recompute the unpacked codes instead of storing them.
+        let mut codes = vec![0u16; dimension];
+        let mask = if ex_bits_usize == 0 {
+            0u16
+        } else {
+            ((1u32 << ex_bits_usize) - 1) as u16
+        };
+        for (i, slot) in codes.iter_mut().enumerate() {
+            let bit = (binary_codes[i / 8] >> (i % 8)) & 1;
+            let extended = if ex_bits_usize == 0 {
+                0u16
+            } else {
+                let bit_at = i * ex_bits_usize;
+                let byte = extended_codes[bit_at / 8];
+                let offset = bit_at % 8;
+                let mut value = (byte >> offset) as u32;
+                let available = 8 - offset;
+                if available < ex_bits_usize {
+                    let next = extended_codes.get(bit_at / 8 + 1).copied().unwrap_or(0) as u32;
+                    value |= next << available;
+                }
+                value as u16 & mask
+            };
+            *slot = extended + ((bit as u16) << ex_bits_usize);
+        }
+
+        Ok(Self {
+            binary_codes,
+            extended_codes,
+            codes,
+            ex_bits,
+            dimension,
+            delta,
+            vl,
+            f_add,
+            f_rescale,
+            f_error,
+            residual_norm,
+        })
+    }
+}
+
 /// RaBitQ quantizer with extended bit support.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RaBitQQuantizer {
@@ -1076,6 +1243,72 @@ pub struct EdgeQuantizedVector {
     pub ip_parent_rot_codes: f32,
 }
 
+/// Magic bytes at the start of a serialised [`EdgeQuantizedVector`].
+const EDGE_MAGIC: &[u8; 6] = b"QNTZED";
+/// Format version for [`EdgeQuantizedVector::to_bytes`].
+pub const EDGE_CODE_FORMAT_VERSION: u8 = 1;
+/// Header length: magic, version, reserved, payload length, parent scalar.
+pub const EDGE_CODE_HEADER_LEN: usize = 6 + 1 + 1 + 4 + 4;
+
+impl EdgeQuantizedVector {
+    /// Bytes this edge occupies when serialised.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        EDGE_CODE_HEADER_LEN + self.quantized.encoded_len()
+    }
+
+    /// Serialise this edge code.
+    ///
+    /// The payload is the inner [`QuantizedVector`] followed by nothing else;
+    /// the parent scalar sits in the header. Keeping the codec here rather than
+    /// exposing a constructor means a caller can store and reload codes without
+    /// being able to assemble one whose `ip_parent_rot_codes` does not belong to
+    /// the parent used for the residual.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let inner = self.quantized.to_bytes();
+        let mut out = Vec::with_capacity(EDGE_CODE_HEADER_LEN + inner.len());
+        out.extend_from_slice(EDGE_MAGIC);
+        out.push(EDGE_CODE_FORMAT_VERSION);
+        out.push(0);
+        out.extend_from_slice(&(inner.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.ip_parent_rot_codes.to_le_bytes());
+        out.extend_from_slice(&inner);
+        out
+    }
+
+    /// Rebuild an edge code from [`Self::to_bytes`].
+    ///
+    /// The inner code is validated by [`QuantizedVector::from_bytes`]. The
+    /// parent scalar must be finite. As with the inner code, decoding cannot
+    /// prove that the scalar matches the parent you are about to search with.
+    pub fn from_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        let malformed = |reason: &'static str| VQuantError::MalformedCode { reason };
+        if bytes.len() < EDGE_CODE_HEADER_LEN {
+            return Err(malformed("edge code shorter than the header"));
+        }
+        if &bytes[0..6] != EDGE_MAGIC {
+            return Err(malformed("wrong edge magic bytes"));
+        }
+        if bytes[6] != EDGE_CODE_FORMAT_VERSION {
+            return Err(malformed("unsupported edge format version"));
+        }
+        let payload_len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+        let ip_parent_rot_codes = f32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+        if !ip_parent_rot_codes.is_finite() {
+            return Err(malformed("non-finite parent inner product"));
+        }
+        if bytes.len() != EDGE_CODE_HEADER_LEN + payload_len {
+            return Err(malformed("edge length does not match the declared payload"));
+        }
+        let quantized = QuantizedVector::from_bytes(&bytes[EDGE_CODE_HEADER_LEN..])?;
+        Ok(Self {
+            quantized,
+            ip_parent_rot_codes,
+        })
+    }
+}
+
 // ============================================================================
 // Optimal Rescaling Factor (Heap-Based)
 // ============================================================================
@@ -1373,6 +1606,115 @@ fn apply_rotation(vector: &[f32], rotation: &[f32], dimension: usize) -> Vec<f32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- code serialisation ----
+
+    fn sample_edge(dim: usize, bits: u8) -> EdgeQuantizedVector {
+        let config = match bits {
+            1 => RaBitQConfig::binary(),
+            2 => RaBitQConfig::bits2(),
+            _ => RaBitQConfig::bits4(),
+        };
+        let quantizer = RaBitQQuantizer::with_config(dim, 11, config).unwrap();
+        let mut state = 0x1234_5678u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 33) as f32 / (1u32 << 30) as f32 - 1.0
+        };
+        let parent: Vec<f32> = (0..dim).map(|_| next()).collect();
+        let child: Vec<f32> = (0..dim).map(|_| next()).collect();
+        let rp = quantizer.rotate_query(&parent).unwrap();
+        let rc = quantizer.rotate_query(&child).unwrap();
+        let residual: Vec<f32> = rc.iter().zip(&rp).map(|(a, b)| a - b).collect();
+        quantizer.quantize_edge_prerotated(&rp, &residual).unwrap()
+    }
+
+    #[test]
+    fn code_round_trip_preserves_every_field() {
+        for dim in [8usize, 16, 96, 100, 127] {
+            for bits in [1u8, 2, 4] {
+                let edge = sample_edge(dim, bits);
+                let bytes = edge.to_bytes();
+                assert_eq!(bytes.len(), edge.encoded_len());
+                let back = EdgeQuantizedVector::from_bytes(&bytes).unwrap();
+                assert_eq!(back.ip_parent_rot_codes, edge.ip_parent_rot_codes);
+                assert_eq!(back.quantized.dimension, edge.quantized.dimension);
+                assert_eq!(back.quantized.ex_bits, edge.quantized.ex_bits);
+                assert_eq!(back.quantized.delta, edge.quantized.delta);
+                assert_eq!(back.quantized.vl, edge.quantized.vl);
+                assert_eq!(back.quantized.f_add, edge.quantized.f_add);
+                assert_eq!(back.quantized.f_rescale, edge.quantized.f_rescale);
+                assert_eq!(back.quantized.f_error, edge.quantized.f_error);
+                assert_eq!(back.quantized.residual_norm, edge.quantized.residual_norm);
+                assert_eq!(back.quantized.binary_codes, edge.quantized.binary_codes);
+                assert_eq!(back.quantized.extended_codes, edge.quantized.extended_codes);
+                // `codes` is derived on load rather than stored; it must agree.
+                assert_eq!(back.quantized.codes, edge.quantized.codes);
+                // And a decoded code must score the same.
+                let config = match bits {
+                    1 => RaBitQConfig::binary(),
+                    2 => RaBitQConfig::bits2(),
+                    _ => RaBitQConfig::bits4(),
+                };
+                let quantizer = RaBitQQuantizer::with_config(dim, 11, config).unwrap();
+                let mut state = 0x99u64;
+                let mut next = || {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (state >> 33) as f32 / (1u32 << 30) as f32 - 1.0
+                };
+                let query: Vec<f32> = (0..dim).map(|_| next()).collect();
+                let rq = quantizer.rotate_query(&query).unwrap();
+                let a = RaBitQQuantizer::edge_distance_term_prerotated(&rq, &edge);
+                let b = RaBitQQuantizer::edge_distance_term_prerotated(&rq, &back);
+                assert_eq!(a, b, "a decoded code must score identically");
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_code_is_rejected() {
+        let edge = sample_edge(32, 2);
+        let bytes = edge.to_bytes();
+        for cut in [0usize, 1, 8, EDGE_CODE_HEADER_LEN, bytes.len() - 1] {
+            assert!(
+                EdgeQuantizedVector::from_bytes(&bytes[..cut]).is_err(),
+                "a {cut}-byte prefix must not decode"
+            );
+        }
+    }
+
+    #[test]
+    fn corrupted_header_is_rejected() {
+        let edge = sample_edge(32, 4);
+        let bytes = edge.to_bytes();
+
+        let mut bad_magic = bytes.clone();
+        bad_magic[0] ^= 0xFF;
+        assert!(EdgeQuantizedVector::from_bytes(&bad_magic).is_err());
+
+        let mut bad_version = bytes.clone();
+        bad_version[6] = 9;
+        assert!(EdgeQuantizedVector::from_bytes(&bad_version).is_err());
+
+        // A non-finite parent scalar is the failure mode a hand-edited file has.
+        let mut nan_parent = bytes.clone();
+        nan_parent[12..16].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(EdgeQuantizedVector::from_bytes(&nan_parent).is_err());
+
+        // Trailing bytes mean the length field and the buffer disagree.
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(EdgeQuantizedVector::from_bytes(&trailing).is_err());
+    }
+
+    #[test]
+    fn inner_code_recomputes_derived_codes() {
+        let edge = sample_edge(48, 4);
+        let inner = edge.quantized.to_bytes();
+        let back = QuantizedVector::from_bytes(&inner).unwrap();
+        assert_eq!(back.codes.len(), 48);
+        assert_eq!(back.codes, edge.quantized.codes);
+    }
 
     /// Gao & Long (2024): the 1-bit RaBitQ distance estimate is unbiased, and
     /// its error is approximately normal with the margin `epsilon_0 = 1.9`

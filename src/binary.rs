@@ -163,12 +163,53 @@ impl BinaryQuantizer {
     ///
     /// Returns [`VQuantError::DimensionMismatch`] if `query.len() != dim` or
     /// `code.len() < code_len()`.
-    #[allow(clippy::needless_range_loop)]
     pub fn asymmetric_distance(&self, query: &[f32], code: &[u8]) -> crate::Result<f32> {
+        let rotated = self.rotate_query(query)?;
+        self.asymmetric_distance_prerotated(&rotated, code)
+    }
+
+    /// Rotate a query into the projected space, once per query.
+    ///
+    /// [`Self::asymmetric_distance`] re-runs a `projected_dim × dim` matvec on
+    /// every call, so scoring `n` codes with it costs `n` rotations. Rotate
+    /// once with this and score the whole set with
+    /// [`Self::asymmetric_distance_prerotated`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VQuantError::DimensionMismatch`] if `query.len() != dim`.
+    pub fn rotate_query(&self, query: &[f32]) -> crate::Result<Vec<f32>> {
         if query.len() != self.dim {
             return Err(VQuantError::DimensionMismatch {
                 expected: self.dim,
                 got: query.len(),
+            });
+        }
+        Ok(apply_rotation_rect(
+            &self.rotation,
+            query,
+            self.dim,
+            self.projected_dim,
+        ))
+    }
+
+    /// Asymmetric distance against a query already rotated by
+    /// [`Self::rotate_query`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VQuantError::DimensionMismatch`] if
+    /// `rotated.len() != projected_dim()` or `code.len() < code_len()`.
+    #[allow(clippy::needless_range_loop)]
+    pub fn asymmetric_distance_prerotated(
+        &self,
+        rotated: &[f32],
+        code: &[u8],
+    ) -> crate::Result<f32> {
+        if rotated.len() != self.projected_dim {
+            return Err(VQuantError::DimensionMismatch {
+                expected: self.projected_dim,
+                got: rotated.len(),
             });
         }
         let required = self.code_len();
@@ -178,9 +219,6 @@ impl BinaryQuantizer {
                 got: code.len(),
             });
         }
-
-        // Rotate query to projected space.
-        let rotated = apply_rotation_rect(&self.rotation, query, self.dim, self.projected_dim);
 
         // Inner product against +/-1 codes.
         // Process 8 elements per byte to avoid per-element div/mod.
@@ -338,6 +376,35 @@ mod tests {
     #[test]
     fn try_new_zero_projected_rejected() {
         assert!(BinaryQuantizer::try_new(8, 0, 42).is_err());
+    }
+
+    #[test]
+    fn prerotated_distance_matches_the_one_shot_call() {
+        // The whole point of the split: rotating once and scoring many codes
+        // must give the same numbers as rotating inside every call.
+        let q = BinaryQuantizer::try_new(96, 96, 7).unwrap();
+        let mut state = 0xABCD_EF01u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 33) as f32 / (1u32 << 30) as f32 - 1.0
+        };
+        let query: Vec<f32> = (0..96).map(|_| next()).collect();
+        let rotated = q.rotate_query(&query).unwrap();
+        for _ in 0..32 {
+            let vector: Vec<f32> = (0..96).map(|_| next()).collect();
+            let code = q.quantize(&vector).unwrap();
+            let one_shot = q.asymmetric_distance(&query, &code).unwrap();
+            let pre = q.asymmetric_distance_prerotated(&rotated, &code).unwrap();
+            assert_eq!(one_shot, pre);
+        }
+    }
+
+    #[test]
+    fn prerotated_distance_checks_the_rotated_length() {
+        let q = BinaryQuantizer::try_new(32, 16, 3).unwrap();
+        let code = q.quantize(&[0.5f32; 32]).unwrap();
+        let wrong = vec![0.0f32; 32]; // must be projected_dim, not dim
+        assert!(q.asymmetric_distance_prerotated(&wrong, &code).is_err());
     }
 
     #[test]

@@ -12,6 +12,25 @@
   on standardized data. Exp(1) quantiles are all non-negative, so values
   below the mean all mapped to code 0 (67% of an Exp(1) sample; MSE 0.351,
   now 0.055). `build_codebook` still returns raw quantiles.
+## [0.3.0] - 2026-11-02
+
+### Added
+- `QuantizedVector::to_bytes` / `from_bytes` / `encode_into` / `encoded_len` and
+  `EdgeQuantizedVector::to_bytes` / `from_bytes`, so a built code can be
+  persisted and reloaded instead of being re-derived from the vectors it came
+  from. The derived `codes` vector is recomputed on load rather than stored, and
+  every checkable property is checked: magic, version, bit width, lengths against
+  the declared dimension, finiteness of the correction factors.
+- `BinaryQuantizer::rotate_query` and `asymmetric_distance_prerotated`, which
+  split the rotate-then-score path so a caller can rotate once per query instead
+  of once per candidate. `asymmetric_distance` is now their composition and
+  behaves identically.
+- `VQuantError::MalformedCode`, carrying a static reason.
+
+### Changed
+- `VQuantError` is now `#[non_exhaustive]`. Decode failures are expected to grow
+  with the number of formats that can be serialised, and callers should have a
+  fallback arm. This is the reason for the minor version bump.
 
 ## [0.2.2] - 2026-10-22
 
