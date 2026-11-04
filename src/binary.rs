@@ -200,7 +200,6 @@ impl BinaryQuantizer {
     ///
     /// Returns [`VQuantError::DimensionMismatch`] if
     /// `rotated.len() != projected_dim()` or `code.len() < code_len()`.
-    #[allow(clippy::needless_range_loop)]
     pub fn asymmetric_distance_prerotated(
         &self,
         rotated: &[f32],
@@ -221,61 +220,7 @@ impl BinaryQuantizer {
         }
 
         // Inner product against +/-1 codes.
-        // Process 8 elements per byte to avoid per-element div/mod.
-        let mut ip = 0.0f32;
-        let full_bytes = rotated.len() / 8;
-        for byte_idx in 0..full_bytes {
-            let byte = code[byte_idx];
-            let base = byte_idx * 8;
-            // Unroll 8 bits per byte: sign = +1 if bit set, -1 otherwise
-            ip += if byte & 1 != 0 {
-                rotated[base]
-            } else {
-                -rotated[base]
-            };
-            ip += if byte & 2 != 0 {
-                rotated[base + 1]
-            } else {
-                -rotated[base + 1]
-            };
-            ip += if byte & 4 != 0 {
-                rotated[base + 2]
-            } else {
-                -rotated[base + 2]
-            };
-            ip += if byte & 8 != 0 {
-                rotated[base + 3]
-            } else {
-                -rotated[base + 3]
-            };
-            ip += if byte & 16 != 0 {
-                rotated[base + 4]
-            } else {
-                -rotated[base + 4]
-            };
-            ip += if byte & 32 != 0 {
-                rotated[base + 5]
-            } else {
-                -rotated[base + 5]
-            };
-            ip += if byte & 64 != 0 {
-                rotated[base + 6]
-            } else {
-                -rotated[base + 6]
-            };
-            ip += if byte & 128 != 0 {
-                rotated[base + 7]
-            } else {
-                -rotated[base + 7]
-            };
-        }
-        // Tail elements
-        for i in (full_bytes * 8)..rotated.len() {
-            let byte_idx = i / 8;
-            let bit_idx = i % 8;
-            let bit = (code[byte_idx] >> bit_idx) & 1;
-            ip += if bit == 1 { rotated[i] } else { -rotated[i] };
-        }
+        let ip = crate::simd_ops::sign_dot(rotated, code);
 
         // Negate so that similar vectors have smaller distance.
         Ok(-ip / self.projected_dim as f32)

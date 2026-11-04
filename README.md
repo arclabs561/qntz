@@ -4,7 +4,7 @@ Vector quantization.
 
 ```toml
 [dependencies]
-qntz = "0.2.3"
+qntz = "0.3"
 ```
 
 ```rust

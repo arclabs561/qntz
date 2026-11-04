@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Changed
+- Binary asymmetric scoring (`asymmetric_inner_product`,
+  `BinaryQuantizer::asymmetric_distance_prerotated`, the batch L2) uses
+  innr's `sign_dot` with the `simd` feature and an eight-lane loop without
+  it, instead of one accumulator with a branch per bit. Per code, innr's
+  probe measured 4.5x (128 bits) to 6.5x (1536 bits) on an Apple M3 and 5x
+  to 15.8x on an i7-8559U; `batch_asymmetric_l2_into` over 256 codes of 768
+  bits went from 1.62 ms to 95 us on the M3 (separate runs, machine loaded).
+- `batch_asymmetric_l2_into` computes the query norm once per batch, not
+  once per code.
+- The optional `innr` dependency is 0.7.7 (was 0.6.3), so builds with
+  `vicinity` no longer carry two innr versions once both move.
+
+## [0.3.0] - 2026-11-02
+
+### Added
+- RaBitQ codes serialise: `QuantizedVector` and `EdgeQuantizedVector` have
+  `to_bytes` / `from_bytes`, validating magic, version, bit width, lengths,
+  finite correction factors and extended-code ranges.
+- `BinaryQuantizer::rotate_query` and `asymmetric_distance_prerotated`, so a
+  scan rotates the query once instead of once per code;
+  `asymmetric_distance` is their composition.
+
+### Changed
+- `VQuantError` gains `MalformedCode` and is `#[non_exhaustive]`.
+
 ## [0.2.3] - 2026-10-30
 
 ### Fixed
