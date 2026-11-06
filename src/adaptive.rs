@@ -142,6 +142,7 @@ impl AdaptiveQuantizer {
     ///
     /// More accurate than symmetric distance (both quantized) because the query
     /// is not quantized.
+    #[inline]
     pub fn asymmetric_distance(query: &[f32], quantized: &AdaptiveQuantized) -> f32 {
         debug_assert_eq!(query.len(), quantized.codes.len());
         if quantized.codes.is_empty() {
@@ -155,15 +156,17 @@ impl AdaptiveQuantizer {
         };
         let offset = quantized.offset;
 
-        query
-            .iter()
-            .zip(quantized.codes.iter())
-            .map(|(&q, &c)| {
-                let recon = (c as f32) * step + offset;
-                let diff = q - recon;
-                diff * diff
-            })
-            .sum()
+        // Indexed loop over slices so LLVM can vectorise; the iterator form
+        // with a capturing closure does not, which showed up as ~8 ns/dimension
+        // in vicinity's binary-index scan.
+        let codes = quantized.codes.as_slice();
+        let mut total = 0.0f32;
+        for i in 0..codes.len() {
+            let recon = f32::from(codes[i]) * step + offset;
+            let diff = query[i] - recon;
+            total += diff * diff;
+        }
+        total
     }
 
     /// Batch quantize multiple vectors.
