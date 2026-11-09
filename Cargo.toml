@@ -42,7 +42,7 @@ binary = []
 matryoshka = []
 
 [dev-dependencies]
-ans = "0.4"
+ans = "0.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.9"
 
