@@ -82,6 +82,7 @@ required-features = ["adaptive"]
 [[example]]
 name = "sift_rabitq_recall"
 path = "examples/sift_rabitq_recall.rs"
+test = true
 required-features = ["rabitq"]
 
 [[example]]
