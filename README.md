@@ -60,6 +60,8 @@ feature requires Rust 1.89 through `innr`.
 qntz provides quantization and code operations, not an ANN index; validation
 and error behavior are specific to each API.
 
+To measure recall and serialized size on your own vectors, pass two `.fvecs` files to the [RaBitQ recall example](examples/README.md#sift_rabitq_recall).
+
 ## License
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at
