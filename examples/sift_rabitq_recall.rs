@@ -141,9 +141,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut recall_sums = vec![0.0f64; budgets.len()];
         for (q, exact_ids) in queries.iter().zip(&exact) {
+            // The query-only distance offset cancels when ranking candidates.
+            let rotated = quant.rotate_query(q)?;
             let approx_dists: Vec<f32> = codes
                 .iter()
-                .map(|c| quant.approximate_l2_sqr(q, c))
+                .map(|c| RaBitQQuantizer::try_approximate_l2_sqr_prerotated(&rotated, c))
                 .collect::<qntz::Result<_>>()?;
             for (bi, &c) in budgets.iter().enumerate() {
                 // Filter: top-C by cheap approximate distance.
