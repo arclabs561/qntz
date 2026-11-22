@@ -156,12 +156,10 @@ impl AdaptiveQuantizer {
         };
         let offset = quantized.offset;
 
-        // Indexed loop over slices so LLVM can vectorise; the iterator form
-        // with a capturing closure does not, which showed up as ~8 ns/dimension
-        // in vicinity's binary-index scan.
+        // Match the overlapping-prefix behavior of the original zipped scan.
         let codes = quantized.codes.as_slice();
         let mut total = 0.0f32;
-        for i in 0..codes.len() {
+        for i in 0..query.len().min(codes.len()) {
             let recon = f32::from(codes[i]) * step + offset;
             let diff = query[i] - recon;
             total += diff * diff;
@@ -669,6 +667,22 @@ mod tests {
         assert!(
             rel_err < 0.05,
             "asymmetric distance relative error too high: {rel_err}"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_asymmetric_distance_uses_overlapping_prefix() {
+        let stored = AdaptiveQuantized {
+            codes: vec![0, 1],
+            scale: 1.0,
+            offset: 0.0,
+            bits: 1,
+        };
+        assert_eq!(AdaptiveQuantizer::asymmetric_distance(&[2.0], &stored), 4.0);
+        assert_eq!(
+            AdaptiveQuantizer::asymmetric_distance(&[2.0, 3.0, 4.0], &stored),
+            8.0
         );
     }
 
