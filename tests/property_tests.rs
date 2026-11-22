@@ -18,7 +18,5 @@ fn property_tests_are_not_silently_empty() {
     qntz::simd_ops::unpack_binary_fast(&packed, &mut unpacked, codes.len()).expect("unpack");
     assert_eq!(unpacked, codes, "binary pack/unpack must roundtrip");
 
-    eprintln!(
-        "tests/property_tests.rs: enable rabitq and ternary to run all quantizer properties"
-    );
+    eprintln!("tests/property_tests.rs: enable rabitq and ternary to run all quantizer properties");
 }
