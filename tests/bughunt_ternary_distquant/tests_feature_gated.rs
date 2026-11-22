@@ -11,12 +11,14 @@ impl Rng {
     fn unit(&mut self) -> f64 {
         ((self.next() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
     }
+    #[cfg(feature = "ternary")]
     fn gauss(&mut self) -> f64 {
         let (u, v) = (self.unit(), self.unit());
         (-2.0 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()
     }
 }
 
+#[cfg(feature = "ternary")]
 #[test]
 fn bughunt_ternary_target_sparsity_with_default_normalize() {
     use qntz::ternary::{TernaryConfig, TernaryQuantizer};
@@ -45,6 +47,7 @@ fn bughunt_ternary_target_sparsity_with_default_normalize() {
     );
 }
 
+#[cfg(feature = "distquant")]
 #[test]
 fn bughunt_distquant_exponential_location_mismatch() {
     use qntz::distquant::{quantization_mse, quantize, Distribution};

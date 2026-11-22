@@ -1,11 +1,8 @@
 //! Regressions for ternary target sparsity and the distquant Exponential prior.
 //!
-//! The suite needs `ternary` and `distquant`. The gate lives on the module
-//! declaration below instead of a file-level `#![cfg(...)]`, so a partial
-//! feature set still compiles and runs a real check rather than reporting
-//! success having compared nothing.
+//! Each regression runs whenever its quantizer is available.
 
-#[cfg(all(feature = "ternary", feature = "distquant"))]
+#[cfg(any(feature = "ternary", feature = "distquant"))]
 #[path = "bughunt_ternary_distquant/tests_feature_gated.rs"]
 mod tests_feature_gated;
 
@@ -22,6 +19,6 @@ fn bughunt_suite_is_not_silently_empty() {
     );
 
     eprintln!(
-        "tests/bughunt_ternary_distquant.rs: enable features ternary,distquant to run the gated regression suite"
+        "tests/bughunt_ternary_distquant.rs: enable ternary and distquant to run both quantizer regressions"
     );
 }

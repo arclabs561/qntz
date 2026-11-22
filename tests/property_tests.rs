@@ -1,11 +1,8 @@
 //! Property tests for low-bit code packing.
 //!
-//! The suite needs `rabitq` and `ternary`. The gate lives on the module
-//! declaration below instead of a file-level `#![cfg(...)]`, so a partial
-//! feature set still compiles and runs a real check rather than reporting
-//! success having compared nothing.
+//! Packing and portable distance properties run in the default build.
+//! Quantizer-specific properties run when their feature is selected.
 
-#[cfg(all(feature = "rabitq", feature = "ternary"))]
 #[path = "property_tests/tests_feature_gated.rs"]
 mod tests_feature_gated;
 
@@ -22,6 +19,6 @@ fn property_tests_are_not_silently_empty() {
     assert_eq!(unpacked, codes, "binary pack/unpack must roundtrip");
 
     eprintln!(
-        "tests/property_tests.rs: enable features rabitq,ternary to run the gated property suite"
+        "tests/property_tests.rs: enable rabitq and ternary to run all quantizer properties"
     );
 }
