@@ -211,65 +211,38 @@ pub fn asymmetric_inner_product(query: &[f32], codes: &[u8]) -> crate::Result<f3
             got: codes.len(),
         });
     }
-    let mut sum = 0.0f32;
+    Ok(sign_dot(query, codes))
+}
 
-    let full_bytes = dim / 8;
-    for (byte_idx, &byte) in codes.iter().enumerate().take(full_bytes) {
-        let base = byte_idx * 8;
-
-        sum += if byte & 1 != 0 {
-            query[base]
-        } else {
-            -query[base]
-        };
-        sum += if byte & 2 != 0 {
-            query[base + 1]
-        } else {
-            -query[base + 1]
-        };
-        sum += if byte & 4 != 0 {
-            query[base + 2]
-        } else {
-            -query[base + 2]
-        };
-        sum += if byte & 8 != 0 {
-            query[base + 3]
-        } else {
-            -query[base + 3]
-        };
-        sum += if byte & 16 != 0 {
-            query[base + 4]
-        } else {
-            -query[base + 4]
-        };
-        sum += if byte & 32 != 0 {
-            query[base + 5]
-        } else {
-            -query[base + 5]
-        };
-        sum += if byte & 64 != 0 {
-            query[base + 6]
-        } else {
-            -query[base + 6]
-        };
-        sum += if byte & 128 != 0 {
-            query[base + 7]
-        } else {
-            -query[base + 7]
-        };
+/// `Σ query[i] · (bit i ? +1 : -1)`, bits LSB-first per byte; `codes` has at
+/// least `query.len().div_ceil(8)` bytes (callers check).
+///
+/// With `simd`, innr's dispatched kernel. Without it, eight lane accumulators
+/// with the sign applied as a sign-bit flip, which LLVM vectorizes; one
+/// accumulator with a branch per bit was 4.5 to 16x slower per code.
+#[inline]
+pub(crate) fn sign_dot(query: &[f32], codes: &[u8]) -> f32 {
+    #[cfg(feature = "simd")]
+    {
+        innr::binary::sign_dot(query, codes)
     }
-
-    let remaining = dim % 8;
-    if remaining > 0 && full_bytes < codes.len() {
-        let byte = codes[full_bytes];
-        let base = full_bytes * 8;
-        for i in 0..remaining {
-            let sign = if (byte >> i) & 1 != 0 { 1.0 } else { -1.0 };
-            sum += sign * query[base + i];
+    #[cfg(not(feature = "simd"))]
+    {
+        let mut chunks = query.chunks_exact(8);
+        let mut acc = [0.0f32; 8];
+        for (q, &byte) in (&mut chunks).zip(codes) {
+            for t in 0..8 {
+                let flip = (!(u32::from(byte) >> t) & 1) << 31;
+                acc[t] += f32::from_bits(q[t].to_bits() ^ flip);
+            }
         }
+        let full = query.len() / 8;
+        let mut tail = 0.0f32;
+        for (t, &x) in chunks.remainder().iter().enumerate() {
+            tail += if (codes[full] >> t) & 1 == 1 { x } else { -x };
+        }
+        acc.iter().sum::<f32>() + tail
     }
-
-    Ok(sum)
 }
 
 /// Asymmetric L2 distance squared: `||q - b||^2 = ||q||^2 + D - 2<q, b>`
@@ -348,10 +321,13 @@ pub fn batch_asymmetric_l2_into(
         }
     }
 
+    // The query norm is the same for every code: compute it once.
+    let query_norm_sq: f32 = query.iter().map(|x| x * x).sum();
+    let dim = query.len() as f32;
     distances.clear();
     distances.reserve(codes.len());
     for code in codes {
-        distances.push(asymmetric_l2_squared(query, code)?);
+        distances.push(query_norm_sq + dim - 2.0 * sign_dot(query, code));
     }
     Ok(())
 }
@@ -565,6 +541,42 @@ mod tests {
         let a = vec![0b11111111];
         let b = vec![0b00000000];
         assert_eq!(hamming_distance(&a, &b), 8);
+    }
+
+    /// Against an f64 oracle with the sign rule written out, at lengths
+    /// inside a byte, across the 8-lane chunks and SIMD widths. Runs on
+    /// innr's kernel with `simd` and on the fallback loop without it.
+    #[test]
+    fn asymmetric_inner_product_matches_oracle() {
+        for n in [
+            0usize, 1, 7, 8, 9, 15, 16, 17, 31, 64, 70, 128, 300, 768, 1001,
+        ] {
+            let q: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.7311).sin() * 3.0).collect();
+            let codes: Vec<u8> = (0..n.div_ceil(8))
+                .map(|i| (i as u8).wrapping_mul(151) ^ 0x5a)
+                .collect();
+            let want: f64 = (0..n)
+                .map(|i| {
+                    let x = f64::from(q[i]);
+                    if (codes[i / 8] >> (i % 8)) & 1 == 1 {
+                        x
+                    } else {
+                        -x
+                    }
+                })
+                .sum();
+            let scale: f64 = q.iter().map(|&x| f64::from(x).abs()).sum::<f64>().max(1.0);
+            let got = f64::from(asymmetric_inner_product(&q, &codes).unwrap());
+            assert!((got - want).abs() <= 1e-5 * scale, "n={n}: {got} vs {want}");
+            let mut batch = Vec::new();
+            batch_asymmetric_l2_into(&q, &[codes.as_slice()], &mut batch).unwrap();
+            let norm: f64 = q.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+            let want_l2 = norm + n as f64 - 2.0 * want;
+            assert!(
+                (f64::from(batch[0]) - want_l2).abs() <= 1e-4 * want_l2.abs().max(1.0),
+                "l2 n={n}"
+            );
+        }
     }
 
     #[test]

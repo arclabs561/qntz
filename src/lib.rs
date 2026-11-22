@@ -44,7 +44,12 @@ pub struct ReadmeDoctests;
 pub type Result<T> = std::result::Result<T, VQuantError>;
 
 /// Errors for quantization code operations.
+///
+/// `#[non_exhaustive]`: decode and configuration failures are expected to grow
+/// as more code formats gain a serialised form, and a caller matching on this
+/// enum should always have a fallback arm.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VQuantError {
     /// Dimension or element count mismatch.
     #[error("dimension mismatch: expected {expected}, got {got}")]
@@ -56,6 +61,16 @@ pub enum VQuantError {
         /// Which parameter.
         field: &'static str,
         /// Why it is invalid.
+        reason: &'static str,
+    },
+
+    /// A serialised code did not decode.
+    ///
+    /// The reason is static so the variant stays `Copy`-friendly for tests and
+    /// callers that want to branch on the kind of corruption.
+    #[error("malformed code: {reason}")]
+    MalformedCode {
+        /// Why the bytes were rejected.
         reason: &'static str,
     },
 

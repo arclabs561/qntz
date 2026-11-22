@@ -4,7 +4,7 @@ Vector quantization.
 
 ```toml
 [dependencies]
-qntz = "0.2.3"
+qntz = "0.3"
 ```
 
 ```rust
@@ -36,13 +36,31 @@ assert_eq!(hamming_distance(&packed_a, &packed_b), 2);
 | `matryoshka` | scalar codes scanned at several precisions |
 | `serde` | derives on selected binary, RaBitQ, and matryoshka types |
 
-See the runnable [examples](examples/README.md) for the optional quantizers.
+The [examples](examples/README.md) exercise the optional quantizers. For
+instance, `rabitq_error_budget` quantizes 512 clustered 64-dimensional vectors
+at several RaBitQ bit widths and checks how often the reported error margin
+covers the observed squared-distance error:
+
+```sh
+cargo run --release --features rabitq --example rabitq_error_budget
+```
+
+```text
+dataset: 512 docs, dim=64
+bits  mean abs squared error  mean error margin  covered  bytes/code
+   1                  5.8722            15.2647    94.5%         8.0
+   2                  2.6036             7.7498    98.0%        16.0
+   4                  0.7975             2.4264    97.5%        32.0
+   8                  0.0420             0.1131    95.9%        64.0
+```
 
 The Rust library requires Rust 1.80 without `simd`. The optional `simd`
 feature requires Rust 1.89 through `innr`.
 
 qntz provides quantization and code operations, not an ANN index; validation
 and error behavior are specific to each API.
+
+To measure recall and serialized size on your own vectors, pass two `.fvecs` files to the [RaBitQ recall example](examples/README.md#sift_rabitq_recall).
 
 ## License
 

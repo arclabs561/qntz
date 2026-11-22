@@ -3,7 +3,7 @@
 The examples are deterministic and print quantitative checks rather than timing
 claims. Use the benchmarks for throughput measurements.
 
-`sift_rabitq_recall` uses the gitignored SIFT-small dataset fetched by
+With no arguments, `sift_rabitq_recall` uses the gitignored SIFT-small dataset fetched by
 `scripts/fetch_siftsmall.sh`. If the data is absent, it prints the fetch command
 and exits successfully.
 
@@ -134,17 +134,18 @@ reranks the candidate set by exact L2, and reports recall@10.
 cargo run --release --features rabitq --example sift_rabitq_recall
 ```
 
-Output:
+Or compare your own base and query vectors:
 
-```text
-base: 10000 x 128   queries: 100   k = 10
-
-float32 baseline: 512 bytes/vector
-recall@10 at candidate budget C (C=10 is no-rerank):
-
-    bits   bytes/vec   ratio   C=10     C=50     C=100    C=500
-       1          16     32x   0.535   0.933   0.986   1.000
-       2          32     16x   0.742   0.997   1.000   1.000
-       4          64      8x   0.900   1.000   1.000   1.000
-       8         128      4x   0.989   1.000   1.000   1.000
+```sh
+cargo run --release --features rabitq --example sift_rabitq_recall -- base.fvecs queries.fvecs
 ```
+
+Each file contains rows with a little-endian signed 32-bit dimension followed by
+that many little-endian float32 coordinates. Both files must have at least one
+row and the same positive dimension throughout. Use held-out queries to measure
+retrieval on new inputs. The example scans the entire base for exact neighbors.
+
+The table reports packed code payload bytes and the size of one serialized
+record, including its correction factors and header. The shared quantizer and
+the original vectors used for exact reranking cost additional space. For small
+files, k and the candidate budgets are capped at the number of base rows.
