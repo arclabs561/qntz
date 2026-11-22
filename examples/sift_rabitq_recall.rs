@@ -54,12 +54,15 @@ fn read_fvecs(path: &Path) -> io::Result<Vec<Vec<f32>>> {
         .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
 }
 
-fn l2_sqr(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+fn l2_sqr(a: &[f32], b: &[f32]) -> f64 {
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2))
+        .sum()
 }
 
 /// Indices of the k smallest distances.
-fn top_k(dists: &[f32], k: usize) -> Vec<usize> {
+fn top_k(dists: &[f64], k: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..dists.len()).collect();
     idx.sort_unstable_by(|&a, &b| dists[a].total_cmp(&dists[b]).then(a.cmp(&b)));
     idx.truncate(k);
@@ -103,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact: Vec<Vec<usize>> = queries
         .iter()
         .map(|q| {
-            let dists: Vec<f32> = base.iter().map(|b| l2_sqr(q, b)).collect();
+            let dists: Vec<f64> = base.iter().map(|b| l2_sqr(q, b)).collect();
             top_k(&dists, k)
         })
         .collect();
@@ -143,15 +146,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (q, exact_ids) in queries.iter().zip(&exact) {
             // The query-only distance offset cancels when ranking candidates.
             let rotated = quant.rotate_query(q)?;
-            let approx_dists: Vec<f32> = codes
+            let approx_dists: Vec<f64> = codes
                 .iter()
-                .map(|c| RaBitQQuantizer::try_approximate_l2_sqr_prerotated(&rotated, c))
+                .map(|c| {
+                    RaBitQQuantizer::try_approximate_l2_sqr_prerotated(&rotated, c).map(f64::from)
+                })
                 .collect::<qntz::Result<_>>()?;
             for (bi, &c) in budgets.iter().enumerate() {
                 // Filter: top-C by cheap approximate distance.
                 let candidates = top_k(&approx_dists, c);
                 // Rerank: exact L2 on the candidate float vectors, keep top-K.
-                let mut reranked: Vec<(usize, f32)> = candidates
+                let mut reranked: Vec<(usize, f64)> = candidates
                     .iter()
                     .map(|&i| (i, l2_sqr(q, &base[i])))
                     .collect();
@@ -204,6 +209,17 @@ mod tests {
             record(&[f32::NAN]),
         ] {
             assert!(parse_fvecs(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn exact_top_k_preserves_extreme_distances() {
+        for scale in [1e-30_f32, 1e30_f32] {
+            let distances: Vec<_> = (1..=11)
+                .rev()
+                .map(|i| l2_sqr(&[0.0], &[scale * i as f32]))
+                .collect();
+            assert_eq!(top_k(&distances, 10), (1..=10).rev().collect::<Vec<_>>());
         }
     }
 
