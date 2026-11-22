@@ -35,6 +35,9 @@ jobs:
       - name: cargo test
         run: cargo test --all-features
 
+      - name: Run feature-disabled regression checks
+        run: cargo test --no-default-features --test bughunt_ternary_distquant --test property_tests
+
       - name: Semver check
         if: github.event_name == 'pull_request'
         run: |
