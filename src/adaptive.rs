@@ -142,6 +142,7 @@ impl AdaptiveQuantizer {
     ///
     /// More accurate than symmetric distance (both quantized) because the query
     /// is not quantized.
+    #[inline]
     pub fn asymmetric_distance(query: &[f32], quantized: &AdaptiveQuantized) -> f32 {
         debug_assert_eq!(query.len(), quantized.codes.len());
         if quantized.codes.is_empty() {
@@ -155,15 +156,15 @@ impl AdaptiveQuantizer {
         };
         let offset = quantized.offset;
 
-        query
-            .iter()
-            .zip(quantized.codes.iter())
-            .map(|(&q, &c)| {
-                let recon = (c as f32) * step + offset;
-                let diff = q - recon;
-                diff * diff
-            })
-            .sum()
+        // Match the overlapping-prefix behavior of the original zipped scan.
+        let codes = quantized.codes.as_slice();
+        let mut total = 0.0f32;
+        for i in 0..query.len().min(codes.len()) {
+            let recon = f32::from(codes[i]) * step + offset;
+            let diff = query[i] - recon;
+            total += diff * diff;
+        }
+        total
     }
 
     /// Batch quantize multiple vectors.
@@ -666,6 +667,22 @@ mod tests {
         assert!(
             rel_err < 0.05,
             "asymmetric distance relative error too high: {rel_err}"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_asymmetric_distance_uses_overlapping_prefix() {
+        let stored = AdaptiveQuantized {
+            codes: vec![0, 1],
+            scale: 1.0,
+            offset: 0.0,
+            bits: 1,
+        };
+        assert_eq!(AdaptiveQuantizer::asymmetric_distance(&[2.0], &stored), 4.0);
+        assert_eq!(
+            AdaptiveQuantizer::asymmetric_distance(&[2.0, 3.0, 4.0], &stored),
+            8.0
         );
     }
 
